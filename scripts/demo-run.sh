@@ -12,6 +12,8 @@ RELATIONS_API="${RELATIONS_API:-http://localhost:8082}"
 INVENTORY_API="${INVENTORY_API:-http://localhost:8081}"
 KESSEL_INVENTORY_API="${KESSEL_INVENTORY_API:-http://localhost:8083}"
 RBAC_API="${RBAC_API:-http://localhost:8080}"
+RELATIONS_GRPC="${RELATIONS_GRPC:-localhost:9001}"
+INVENTORY_GRPC="${INVENTORY_GRPC:-localhost:9002}"
 
 # Colors
 RED='\033[0;31m'
@@ -72,41 +74,48 @@ check_permission() {
     local res_ns=$(echo "$resource_type" | cut -d/ -f1)
     local res_name=$(echo "$resource_type" | cut -d/ -f2)
 
-    local request_json="{
+    # Route permission checks based on resource type:
+    #   - hbi/* resources → Inventory API gRPC (proxies to Relations API internally)
+    #   - rbac/* resources → Relations API gRPC (direct, as insights-rbac does)
+    local grpc_endpoint
+    local grpc_service
+    local api_label
+    local request_json
+    if [[ "$resource_type" == hbi/* ]]; then
+        grpc_endpoint="$INVENTORY_GRPC"
+        grpc_service="kessel.inventory.v1beta2.KesselInventoryService/Check"
+        api_label="Inventory API → Relations API"
+        # Inventory API uses its own proto format:
+        #   object.resource_type (name only), object.resource_id, object.reporter.type (namespace)
+        #   subject.resource.resource_type, subject.resource.resource_id, subject.resource.reporter.type
+        request_json="{
+  \"object\": { \"resource_type\": \"$res_name\", \"resource_id\": \"$resource_id\", \"reporter\": { \"type\": \"$res_ns\" } },
+  \"relation\": \"$permission\",
+  \"subject\": { \"resource\": { \"resource_type\": \"principal\", \"resource_id\": \"$principal\", \"reporter\": { \"type\": \"rbac\" } } }
+}"
+    else
+        grpc_endpoint="$RELATIONS_GRPC"
+        grpc_service="kessel.relations.v1beta1.KesselCheckService/Check"
+        api_label="Relations API (direct)"
+        # Relations API uses nested ObjectType{namespace, name} format
+        request_json="{
   \"resource\": { \"type\": { \"namespace\": \"$res_ns\", \"name\": \"$res_name\" }, \"id\": \"$resource_id\" },
   \"relation\": \"$permission\",
   \"subject\": { \"subject\": { \"type\": { \"namespace\": \"rbac\", \"name\": \"principal\" }, \"id\": \"$principal\" } }
 }"
-
-    # Route permission checks based on resource type:
-    #   - hbi/* resources → Inventory API (proxies to Relations API internally)
-    #   - rbac/* resources → Relations API /api/authz/v1beta1/check (direct, as insights-rbac does)
-    local api_url
-    local api_endpoint
-    local api_label
-    if [[ "$resource_type" == hbi/* ]]; then
-        api_url="$KESSEL_INVENTORY_API"
-        api_endpoint="/api/kessel/v1beta2/check"
-        api_label="Inventory API → Relations API"
-    else
-        api_url="$RELATIONS_API"
-        api_endpoint="/api/authz/v1beta1/check"
-        api_label="Relations API (direct)"
     fi
 
     # Print request/response to stderr so they display even inside $()
-    print_json "Request: POST $api_url$api_endpoint ($api_label)" "$request_json" >&2
+    print_json "Request: grpcurl $grpc_endpoint $grpc_service ($api_label)" "$request_json" >&2
     echo "" >&2
 
     local response
-    response=$(curl -s -X POST "$api_url$api_endpoint" \
-        -H "Content-Type: application/json" \
-        -d "$request_json" 2>/dev/null)
+    response=$(grpcurl -plaintext -d "$request_json" "$grpc_endpoint" "$grpc_service" 2>/dev/null)
 
     print_json "Response" "$response" >&2
     echo "" >&2
 
-    # Real relations-api returns {"allowed": "ALLOWED_TRUE"} or {"allowed": "ALLOWED_FALSE"}
+    # Both APIs return {"allowed": "ALLOWED_TRUE"} or {"allowed": "ALLOWED_FALSE"}
     local allowed
     allowed=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('allowed','UNKNOWN'))" 2>/dev/null)
 
@@ -118,23 +127,22 @@ write_tuples() {
     local data
     data=$(cat "$file")
 
-    # Add upsert:true to avoid 409 conflicts on re-runs
+    # Add upsert:true to avoid conflicts on re-runs
     local upsert_data
     upsert_data=$(echo "$data" | python3 -c "import sys,json; d=json.load(sys.stdin); d['upsert']=True; print(json.dumps(d))" 2>/dev/null)
 
-    print_json "Request: POST $RELATIONS_API/api/authz/v1beta1/tuples" "$upsert_data"
+    print_json "Request: grpcurl $RELATIONS_GRPC CreateTuples" "$upsert_data"
     echo ""
 
     local response
-    response=$(curl -s -X POST "$RELATIONS_API/api/authz/v1beta1/tuples" \
-        -H "Content-Type: application/json" \
-        -d "$upsert_data" 2>/dev/null)
+    response=$(grpcurl -plaintext -d "$upsert_data" "$RELATIONS_GRPC" \
+        kessel.relations.v1beta1.KesselTupleService/CreateTuples 2>/dev/null)
 
     print_json "Response" "$response"
 }
 
 delete_tuple() {
-    # Delete uses query parameters: filter.resource_namespace, filter.resource_type, etc.
+    # Delete uses a filter object via gRPC
     local res_ns=$1
     local res_type=$2
     local res_id=$3
@@ -143,29 +151,34 @@ delete_tuple() {
     local sub_type=$6
     local sub_id=$7
 
-    local query="filter.resource_namespace=${res_ns}&filter.resource_type=${res_type}&filter.resource_id=${res_id}&filter.relation=${relation}&filter.subject_filter.subject_namespace=${sub_ns}&filter.subject_filter.subject_type=${sub_type}&filter.subject_filter.subject_id=${sub_id}"
-    local url="$RELATIONS_API/api/authz/v1beta1/tuples?${query}"
+    local filter_json="{\"filter\":{\"resource_namespace\":\"${res_ns}\",\"resource_type\":\"${res_type}\",\"resource_id\":\"${res_id}\",\"relation\":\"${relation}\",\"subject_filter\":{\"subject_namespace\":\"${sub_ns}\",\"subject_type\":\"${sub_type}\",\"subject_id\":\"${sub_id}\"}}}"
 
-    echo -e "${DIM}  --- Request: DELETE $RELATIONS_API/api/authz/v1beta1/tuples ---${NC}"
+    echo -e "${DIM}  --- Request: grpcurl $RELATIONS_GRPC DeleteTuples ---${NC}"
     echo "  ${res_ns}/${res_type}:${res_id}#${relation}@${sub_ns}/${sub_type}:${sub_id}"
     echo -e "${DIM}  ---${NC}"
     echo ""
 
     local response
-    response=$(curl -s -X DELETE "$url" 2>/dev/null)
+    response=$(grpcurl -plaintext -d "$filter_json" "$RELATIONS_GRPC" \
+        kessel.relations.v1beta1.KesselTupleService/DeleteTuples 2>/dev/null)
 
     print_json "Response" "$response"
 }
 
 # Check prerequisites
+if ! command -v grpcurl &> /dev/null; then
+    echo -e "${RED}Error: grpcurl not found. Install: brew install grpcurl${NC}"
+    exit 1
+fi
+
 if [ ! -d "$DEMO_DIR" ]; then
     echo -e "${RED}Error: Demo not set up. Run demo-setup.sh first.${NC}"
     exit 1
 fi
 
-# Verify Relations API is reachable
-if ! curl -s "$RELATIONS_API/api/authz/v1beta1/health" &>/dev/null; then
-    echo -e "${RED}Error: Relations API not reachable at $RELATIONS_API${NC}"
+# Verify Relations API is reachable via gRPC
+if ! grpcurl -plaintext "$RELATIONS_GRPC" grpc.health.v1.Health/Check &>/dev/null; then
+    echo -e "${RED}Error: Relations API not reachable at $RELATIONS_GRPC (gRPC)${NC}"
     echo "Start services: cd compose && docker compose up -d"
     exit 1
 fi
@@ -178,14 +191,16 @@ print_header "Kessel Demo - Interactive Mode"
 echo -e "${CYAN}This demo walks through Kessel's authorization capabilities${NC}"
 echo -e "${CYAN}using the real project-kessel/relations-api and inventory-api.${NC}"
 echo ""
-echo -e "${DIM}  Relations API:        $RELATIONS_API${NC}"
+echo -e "${DIM}  Relations API (gRPC): $RELATIONS_GRPC${NC}"
+echo -e "${DIM}  Inventory API (gRPC):$INVENTORY_GRPC${NC}"
+echo -e "${DIM}  Relations API (HTTP): $RELATIONS_API${NC}"
 echo -e "${DIM}  Kessel Inventory API: $KESSEL_INVENTORY_API${NC}"
 echo -e "${DIM}  Insights Inventory:   $INVENTORY_API${NC}"
 echo -e "${DIM}  Insights RBAC:        $RBAC_API${NC}"
 echo ""
-echo -e "${DIM}  Permission check routing:${NC}"
-echo -e "${DIM}    hbi/* resources → Inventory API → Relations API → SpiceDB${NC}"
-echo -e "${DIM}    rbac/* resources → Relations API → SpiceDB (direct, like insights-rbac)${NC}"
+echo -e "${DIM}  Permission check routing (gRPC):${NC}"
+echo -e "${DIM}    hbi/* resources → Inventory API ($INVENTORY_GRPC) → Relations API → SpiceDB${NC}"
+echo -e "${DIM}    rbac/* resources → Relations API ($RELATIONS_GRPC) → SpiceDB (direct, like insights-rbac)${NC}"
 echo ""
 echo "We'll cover:"
 echo "  1. Group membership (teams)"
@@ -213,7 +228,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/tuples"
+print_command "grpcurl -plaintext $RELATIONS_GRPC kessel.relations.v1beta1.KesselTupleService/CreateTuples"
 echo ""
 echo "  rbac/group:engineering --t_member--> rbac/principal:alice"
 echo ""
@@ -228,7 +243,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/check"
+print_command "grpcurl -plaintext $RELATIONS_GRPC kessel.relations.v1beta1.KesselCheckService/Check"
 echo ""
 
 RESULT=$(check_permission "alice" "member" "rbac/group" "engineering")
@@ -262,7 +277,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/tuples (6 tuples)"
+print_command "grpcurl -plaintext $RELATIONS_GRPC CreateTuples (6 tuples)"
 echo ""
 echo "  rbac/role:host_viewer --t_inventory_hosts_read--> rbac/principal:*"
 echo "  rbac/role_binding:eng_prod_binding --t_subject--> rbac/group:engineering#member"
@@ -283,7 +298,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/check"
+print_command "grpcurl -plaintext $RELATIONS_GRPC kessel.relations.v1beta1.KesselCheckService/Check"
 echo ""
 
 RESULT=$(check_permission "alice" "inventory_host_view" "rbac/workspace" "production")
@@ -323,7 +338,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/tuples"
+print_command "grpcurl -plaintext $RELATIONS_GRPC CreateTuples"
 echo ""
 echo "  hbi/host:web-server-01 --t_workspace--> rbac/workspace:production"
 echo ""
@@ -342,7 +357,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $KESSEL_INVENTORY_API/api/kessel/v1beta2/check"
+print_command "grpcurl -plaintext $INVENTORY_GRPC kessel.inventory.v1beta2.KesselInventoryService/Check"
 echo -e "${DIM}  (Inventory API → Relations API → SpiceDB)${NC}"
 echo ""
 
@@ -387,7 +402,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X DELETE $RELATIONS_API/api/authz/v1beta1/tuples?filter..."
+print_command "grpcurl -plaintext $RELATIONS_GRPC kessel.relations.v1beta1.KesselTupleService/DeleteTuples"
 echo ""
 echo "  DELETE: rbac/group:engineering --t_member--> rbac/principal:alice"
 echo ""
@@ -456,7 +471,7 @@ echo ""
 
 wait_for_enter
 
-print_command "curl -X POST $RELATIONS_API/api/authz/v1beta1/tuples (5 tuples)"
+print_command "grpcurl -plaintext $RELATIONS_GRPC CreateTuples (5 tuples)"
 echo ""
 echo "  rbac/workspace:staging --t_parent--> rbac/tenant:techcorp"
 echo "  rbac/role_binding:alice_staging --t_subject--> rbac/principal:alice"
@@ -527,8 +542,10 @@ echo ""
 
 echo -e "${YELLOW}Service URLs:${NC}"
 echo ""
-echo "  Relations API:        $RELATIONS_API  (authorization relationships)"
-echo "  Kessel Inventory API: $KESSEL_INVENTORY_API  (resource + permission proxy)"
+echo "  Relations API (gRPC): $RELATIONS_GRPC  (authorization relationships)"
+echo "  Inventory API (gRPC): $INVENTORY_GRPC  (resource + permission proxy)"
+echo "  Relations API (HTTP): $RELATIONS_API"
+echo "  Kessel Inventory API: $KESSEL_INVENTORY_API"
 echo "  Insights Inventory:   $INVENTORY_API  (host management)"
 echo "  Insights RBAC:        $RBAC_API       (workspace management)"
 echo "  Grafana:              http://localhost:3000 (admin/admin)"

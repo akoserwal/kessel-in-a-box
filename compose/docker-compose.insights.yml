@@ -1,37 +1,145 @@
 # Kessel-in-a-Box: Insights Services (Phase 7)
-# Mock implementations of insights-rbac and insights-host-inventory
-# Demonstrates CDC integration with Kessel
+# Real insights-rbac from quay.io/cloudservices/rbac + insights-host-inventory mock
+# RBAC replicates to Kessel via gRPC (REPLICATION_TO_RELATION_ENABLED)
 
 services:
-  # Insights RBAC Service - Workspace and Role Management
-  # Writes to RBAC PostgreSQL → CDC → Kafka → Relations Sink → Relations API
+  # Redis - Required by insights-rbac for Celery broker and access cache
+  rbac-redis:
+    image: redis:7-alpine
+    container_name: kessel-rbac-redis
+    ports:
+      - "${RBAC_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  # Insights RBAC Migration - Runs Django migrations before the server starts
+  insights-rbac-migrate:
+    image: quay.io/cloudservices/rbac:${INSIGHTS_RBAC_TAG:-latest}
+    container_name: insights-rbac-migrate
+    entrypoint: ["/bin/sh", "-c", "cd /opt/rbac/rbac && python manage.py migrate --noinput"]
+    environment:
+      DEVELOPMENT: "True"
+      DJANGO_READ_DOT_ENV_FILE: "True"
+      DATABASE_SERVICE_NAME: POSTGRES_SQL
+      DATABASE_ENGINE: postgresql
+      DATABASE_NAME: rbac
+      DATABASE_HOST: postgres-rbac
+      DATABASE_PORT: "5432"
+      DATABASE_USER: rbac
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_SQL_SERVICE_HOST: postgres-rbac
+      POSTGRES_SQL_SERVICE_PORT: "5432"
+    depends_on:
+      postgres-rbac:
+        condition: service_healthy
+    networks:
+      - kessel-network
+    restart: "no"
+
+  # Insights RBAC Service - Real RedHatInsights/insights-rbac
+  # Image: quay.io/cloudservices/rbac
+  # Replicates workspaces, roles, groups to Kessel Relations API via gRPC
   insights-rbac:
-    build:
-      context: ../services/insights-rbac
-      dockerfile: Dockerfile
+    image: quay.io/cloudservices/rbac:${INSIGHTS_RBAC_TAG:-latest}
     container_name: insights-rbac
     ports:
       - "${INSIGHTS_RBAC_PORT:-8080}:8080"
     environment:
-      # PostgreSQL RBAC database
-      POSTGRES_HOST: postgres-rbac
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: rbac
-      POSTGRES_USER: rbac
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
-      
-      # Logging
-      LOG_LEVEL: INFO
-      FLASK_ENV: production
+      # Django / Gunicorn
+      DEVELOPMENT: "True"
+      DJANGO_READ_DOT_ENV_FILE: "True"
+      BYPASS_BOP_VERIFICATION: "True"
+      API_PATH_PREFIX: /api/rbac
+      PRINCIPAL_USER_DOMAIN: redhat
+
+      # PostgreSQL database
+      DATABASE_SERVICE_NAME: POSTGRES_SQL
+      DATABASE_ENGINE: postgresql
+      DATABASE_NAME: rbac
+      DATABASE_HOST: postgres-rbac
+      DATABASE_PORT: "5432"
+      DATABASE_USER: rbac
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_SQL_SERVICE_HOST: postgres-rbac
+      POSTGRES_SQL_SERVICE_PORT: "5432"
+
+      # Redis (Celery broker + access cache)
+      REDIS_HOST: rbac-redis
+
+      # V2 API / Workspaces
+      V2_APIS_ENABLED: "True"
+      V2_READ_ONLY_API_MODE: "False"
+      V2_BOOTSTRAP_TENANT: "True"
+      WORKSPACE_HIERARCHY_DEPTH_LIMIT: "5"
+      WORKSPACE_ORG_CREATION_LIMIT: "20000000"
+
+      # Kessel Relations API integration (gRPC)
+      REPLICATION_TO_RELATION_ENABLED: "true"
+      RELATION_API_SERVER: kessel-relations-api:9000
+
+      # Kafka (disabled — using direct gRPC replication instead)
+      KAFKA_ENABLED: "false"
+
+      # Allowed apps for role creation
+      ROLE_CREATE_ALLOW_LIST: "inventory,advisor,compliance,vulnerability,patch,ros,notifications,integrations,cost-management"
     depends_on:
-      postgres-rbac:
+      insights-rbac-migrate:
+        condition: service_completed_successfully
+      rbac-redis:
+        condition: service_healthy
+      kessel-relations-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/rbac/v1/status/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Insights RBAC Celery Worker - Async task processing
+  insights-rbac-worker:
+    image: quay.io/cloudservices/rbac:${INSIGHTS_RBAC_TAG:-latest}
+    container_name: insights-rbac-worker
+    entrypoint: ["/bin/sh", "-c", "cd /opt/rbac/rbac && celery --broker=redis://rbac-redis:6379/0 -A rbac.celery worker --loglevel=INFO"]
+    environment:
+      DEVELOPMENT: "True"
+      DJANGO_READ_DOT_ENV_FILE: "True"
+      DATABASE_SERVICE_NAME: POSTGRES_SQL
+      DATABASE_ENGINE: postgresql
+      DATABASE_NAME: rbac
+      DATABASE_HOST: postgres-rbac
+      DATABASE_PORT: "5432"
+      DATABASE_USER: rbac
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_SQL_SERVICE_HOST: postgres-rbac
+      POSTGRES_SQL_SERVICE_PORT: "5432"
+      REDIS_HOST: rbac-redis
+      REPLICATION_TO_RELATION_ENABLED: "true"
+      RELATION_API_SERVER: kessel-relations-api:9000
+      KAFKA_ENABLED: "false"
+    depends_on:
+      insights-rbac:
+        condition: service_healthy
     networks:
       - kessel-network
     deploy:
@@ -51,8 +159,6 @@ services:
       context: ../services/insights-host-inventory
       dockerfile: Dockerfile
     container_name: insights-host-inventory
-    extra_hosts:
-      - "kessel-inventory-api:${DOCKER_HOST_IP:-host-gateway}"
     ports:
       - "${INSIGHTS_INVENTORY_PORT:-8081}:8081"
     environment:

@@ -177,8 +177,6 @@ services:
       context: ../consumers/rbac-consumer
       dockerfile: Dockerfile
     container_name: kessel-rbac-consumer
-    extra_hosts:
-      - "kessel-relations-api:${DOCKER_HOST_IP:-host-gateway}"
     depends_on:
       kafka:
         condition: service_healthy
@@ -228,8 +226,6 @@ services:
       args:
         VERSION: latest
     container_name: kessel-inventory-consumer
-    extra_hosts:
-      - "kessel-inventory-api:${DOCKER_HOST_IP:-host-gateway}"
     command: ["start"]
     depends_on:
       kafka:

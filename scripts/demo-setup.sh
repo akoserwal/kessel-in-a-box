@@ -37,6 +37,12 @@ if ! command -v curl &> /dev/null; then
 fi
 echo -e "${GREEN}  curl installed${NC}"
 
+if ! command -v grpcurl &> /dev/null; then
+    echo -e "${RED}Error: grpcurl not found. Install: brew install grpcurl${NC}"
+    exit 1
+fi
+echo -e "${GREEN}  grpcurl installed${NC}"
+
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}Error: python3 not found.${NC}"
     exit 1
@@ -57,20 +63,22 @@ RELATIONS_API="http://localhost:8082"
 KESSEL_INVENTORY_API="http://localhost:8083"
 INVENTORY_API="http://localhost:8081"
 RBAC_API="http://localhost:8080"
+RELATIONS_GRPC="${RELATIONS_GRPC:-localhost:9001}"
+INVENTORY_GRPC="${INVENTORY_GRPC:-localhost:9002}"
 
-# Check Relations API is running
+# Check Relations API is running via gRPC
 echo -e "${YELLOW}Checking services...${NC}"
-if ! curl -s "$RELATIONS_API/api/authz/v1beta1/health" &>/dev/null; then
-    echo -e "${RED}Error: Relations API not reachable at $RELATIONS_API${NC}"
+if ! grpcurl -plaintext "$RELATIONS_GRPC" grpc.health.v1.Health/Check &>/dev/null; then
+    echo -e "${RED}Error: Relations API not reachable at $RELATIONS_GRPC (gRPC)${NC}"
     echo "Start services: cd compose && docker compose up -d"
     exit 1
 fi
-echo -e "${GREEN}  Relations API is running${NC}"
+echo -e "${GREEN}  Relations API is running (gRPC: $RELATIONS_GRPC)${NC}"
 
-if ! curl -s "$KESSEL_INVENTORY_API/api/kessel/v1/livez" &>/dev/null; then
-    echo -e "${YELLOW}  Kessel Inventory API not reachable at $KESSEL_INVENTORY_API${NC}"
+if ! grpcurl -plaintext "$INVENTORY_GRPC" grpc.health.v1.Health/Check &>/dev/null; then
+    echo -e "${YELLOW}  Kessel Inventory API not reachable at $INVENTORY_GRPC (gRPC)${NC}"
 else
-    echo -e "${GREEN}  Kessel Inventory API is running (proxies permission checks)${NC}"
+    echo -e "${GREEN}  Kessel Inventory API is running (gRPC: $INVENTORY_GRPC)${NC}"
 fi
 
 if ! curl -s "$INVENTORY_API/health" &>/dev/null; then
@@ -79,7 +87,7 @@ else
     echo -e "${GREEN}  Insights Inventory API is running${NC}"
 fi
 
-if ! curl -s "$RBAC_API/health" &>/dev/null; then
+if ! curl -s "$RBAC_API/api/rbac/v1/status/" &>/dev/null; then
     echo -e "${YELLOW}  RBAC API not reachable (workspace creation will be skipped)${NC}"
 else
     echo -e "${GREEN}  RBAC API is running${NC}"
@@ -227,7 +235,7 @@ echo ""
 # Create helper script
 cat > "$DEMO_DIR/check-permission.sh" << 'EOFSCRIPT'
 #!/bin/bash
-# Quick permission check helper
+# Quick permission check helper (gRPC)
 # Routes hbi/* checks through Inventory API, rbac/* checks through Relations API
 # Usage: check-permission.sh <principal> <permission> <resource_type:resource_id>
 # Example: check-permission.sh alice view hbi/host:web-server-01
@@ -242,8 +250,8 @@ fi
 PRINCIPAL=$1
 PERMISSION=$2
 RESOURCE=$3
-RELATIONS_API="${RELATIONS_API:-http://localhost:8082}"
-KESSEL_INVENTORY_API="${KESSEL_INVENTORY_API:-http://localhost:8083}"
+RELATIONS_GRPC="${RELATIONS_GRPC:-localhost:9001}"
+INVENTORY_GRPC="${INVENTORY_GRPC:-localhost:9002}"
 
 # Parse resource_type (namespace/name) and resource_id
 RESOURCE_TYPE=$(echo "$RESOURCE" | rev | cut -d: -f2- | rev)
@@ -251,22 +259,31 @@ RESOURCE_ID=$(echo "$RESOURCE" | rev | cut -d: -f1 | rev)
 RESOURCE_NS=$(echo "$RESOURCE_TYPE" | cut -d/ -f1)
 RESOURCE_NAME=$(echo "$RESOURCE_TYPE" | cut -d/ -f2)
 
-# Route based on resource type
+# Route based on resource type and use appropriate request format
 if echo "$RESOURCE_TYPE" | grep -q "^hbi/"; then
-    API_URL="$KESSEL_INVENTORY_API/api/kessel/v1beta2/check"
-    echo "Routing via Inventory API → Relations API" >&2
+    GRPC_ENDPOINT="$INVENTORY_GRPC"
+    GRPC_SERVICE="kessel.inventory.v1beta2.KesselInventoryService/Check"
+    echo "Routing via Inventory API → Relations API (gRPC)" >&2
+    # Inventory API format: object.resource_type (name), object.reporter.type (namespace)
+    REQUEST_BODY="{
+      \"object\": { \"resource_type\": \"$RESOURCE_NAME\", \"resource_id\": \"$RESOURCE_ID\", \"reporter\": { \"type\": \"$RESOURCE_NS\" } },
+      \"relation\": \"$PERMISSION\",
+      \"subject\": { \"resource\": { \"resource_type\": \"principal\", \"resource_id\": \"$PRINCIPAL\", \"reporter\": { \"type\": \"rbac\" } } }
+    }"
 else
-    API_URL="$RELATIONS_API/api/authz/v1beta1/check"
-    echo "Routing via Relations API (direct)" >&2
+    GRPC_ENDPOINT="$RELATIONS_GRPC"
+    GRPC_SERVICE="kessel.relations.v1beta1.KesselCheckService/Check"
+    echo "Routing via Relations API (direct, gRPC)" >&2
+    # Relations API format: nested ObjectType{namespace, name}
+    REQUEST_BODY="{
+      \"resource\": { \"type\": { \"namespace\": \"$RESOURCE_NS\", \"name\": \"$RESOURCE_NAME\" }, \"id\": \"$RESOURCE_ID\" },
+      \"relation\": \"$PERMISSION\",
+      \"subject\": { \"subject\": { \"type\": { \"namespace\": \"rbac\", \"name\": \"principal\" }, \"id\": \"$PRINCIPAL\" } }
+    }"
 fi
 
-curl -s -X POST "$API_URL" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"resource\": { \"type\": { \"namespace\": \"$RESOURCE_NS\", \"name\": \"$RESOURCE_NAME\" }, \"id\": \"$RESOURCE_ID\" },
-    \"relation\": \"$PERMISSION\",
-    \"subject\": { \"subject\": { \"type\": { \"namespace\": \"rbac\", \"name\": \"principal\" }, \"id\": \"$PRINCIPAL\" } }
-  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('allowed','UNKNOWN'))" 2>/dev/null || \
+grpcurl -plaintext -d "$REQUEST_BODY" "$GRPC_ENDPOINT" "$GRPC_SERVICE" | \
+  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('allowed','UNKNOWN'))" 2>/dev/null || \
   echo "ERROR: Could not check permission"
 EOFSCRIPT
 
@@ -283,14 +300,16 @@ echo -e "${GREEN}  kessel-in-a-box is running${NC}"
 echo -e "${GREEN}  Demo data files ready (Relations API CreateTuples format)${NC}"
 echo ""
 echo -e "${YELLOW}Service URLs:${NC}"
-echo "  Relations API:        $RELATIONS_API"
+echo "  Relations API (gRPC): $RELATIONS_GRPC"
+echo "  Inventory API (gRPC): $INVENTORY_GRPC"
+echo "  Relations API (HTTP): $RELATIONS_API"
 echo "  Kessel Inventory API: $KESSEL_INVENTORY_API"
 echo "  Insights Inventory:   $INVENTORY_API"
 echo "  Insights RBAC:        $RBAC_API"
 echo ""
-echo -e "${YELLOW}Permission Check Routing:${NC}"
-echo "  hbi/* → $KESSEL_INVENTORY_API/api/kessel/v1beta2/check → Relations API → SpiceDB"
-echo "  rbac/* → $RELATIONS_API/api/authz/v1beta1/check → SpiceDB (direct, like insights-rbac)"
+echo -e "${YELLOW}Permission Check Routing (gRPC):${NC}"
+echo "  hbi/* → $INVENTORY_GRPC (KesselInventoryService/Check) → Relations API → SpiceDB"
+echo "  rbac/* → $RELATIONS_GRPC (KesselCheckService/Check) → SpiceDB (direct, like insights-rbac)"
 echo ""
 echo -e "${YELLOW}Demo Resources:${NC}"
 echo "  Demo directory:  $DEMO_DIR"
