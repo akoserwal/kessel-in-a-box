@@ -1,0 +1,16 @@
+# Grafana Dashboard Provisioning Configuration
+
+apiVersion: 1
+
+providers:
+  # Dashboard provider for Kessel
+  - name: 'Kessel Dashboards'
+    orgId: 1
+    folder: 'Kessel'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

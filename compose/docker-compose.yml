@@ -1,0 +1,363 @@
+# Kessel-in-a-Box: Core Stack (Updated for Phase 5)
+# Complete environment with 3 PostgreSQL instances + SpiceDB
+
+services:
+  # PostgreSQL - RBAC Database (insights-rbac data)
+  postgres-rbac:
+    image: postgres:15-alpine
+    container_name: kessel-postgres-rbac
+    environment:
+      POSTGRES_USER: rbac
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_DB: rbac
+      # Performance tuning for local development
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_RBAC_PORT:-5432}:5432"
+    volumes:
+      - postgres-rbac-data:/var/lib/postgresql/data
+      - ./init-scripts/rbac:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbac"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # PostgreSQL - Inventory Database (insights-host-inventory + kessel-inventory data)
+  postgres-inventory:
+    image: postgres:15-alpine
+    container_name: kessel-postgres-inventory
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_DB: inventory
+      # Performance tuning for local development
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_INVENTORY_PORT:-5433}:5432"
+    volumes:
+      - postgres-inventory-data:/var/lib/postgresql/data
+      - ./init-scripts/inventory:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # PostgreSQL - SpiceDB datastore
+  postgres-spicedb:
+    image: postgres:15-alpine
+    container_name: kessel-postgres-spicedb
+    environment:
+      POSTGRES_USER: spicedb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_DB: spicedb
+      # Performance tuning for local development
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_SPICEDB_PORT:-5434}:5432"
+    volumes:
+      - postgres-spicedb-data:/var/lib/postgresql/data
+      - ./init-scripts/spicedb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spicedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # SpiceDB - Authorization service
+  spicedb:
+    image: authzed/spicedb:latest
+    container_name: kessel-spicedb
+    command:
+      - serve
+      - --grpc-preshared-key=${SPICEDB_PRESHARED_KEY:-testtesttesttest}
+      - --grpc-addr=0.0.0.0:50051
+      - --http-enabled=true
+      - --http-addr=0.0.0.0:8443
+      - --metrics-addr=0.0.0.0:9090
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://spicedb:${POSTGRES_PASSWORD:-secretpassword}@postgres-spicedb:5432/spicedb?sslmode=disable
+      # Performance and reliability settings
+      - --datastore-gc-window=1h
+      - --datastore-revision-fuzzing-duration=5s
+      # Logging
+      - --log-level=${SPICEDB_LOG_LEVEL:-info}
+    ports:
+      - "${SPICEDB_GRPC_PORT:-50051}:50051"  # gRPC API
+      - "${SPICEDB_HTTP_PORT:-8443}:8443"    # HTTP/REST API
+      - "${SPICEDB_METRICS_PORT:-9090}:9090" # Prometheus metrics
+    depends_on:
+      postgres-spicedb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # SpiceDB Migration Tool (runs once to initialize schema)
+  spicedb-migrate:
+    image: authzed/spicedb:latest
+    container_name: kessel-spicedb-migrate
+    command:
+      - migrate
+      - head
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://spicedb:${POSTGRES_PASSWORD:-secretpassword}@postgres-spicedb:5432/spicedb?sslmode=disable
+    depends_on:
+      postgres-spicedb:
+        condition: service_healthy
+    networks:
+      - kessel-network
+    restart: "no"
+
+  # SpiceDB Schema Loader (loads stage schema from rbac-config)
+  spicedb-schema-loader:
+    image: authzed/zed:latest
+    container_name: kessel-spicedb-schema-loader
+    command:
+      - schema
+      - write
+      - /schema/schema.zed
+      - --endpoint=spicedb:50051
+      - --token=${SPICEDB_PRESHARED_KEY:-testtesttesttest}
+      - --insecure
+    volumes:
+      - ../services/spicedb/schema:/schema:ro
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    networks:
+      - kessel-network
+    restart: "no"
+
+  # Prometheus - Metrics collection and storage
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: kessel-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: kessel-grafana
+    environment:
+      # Admin credentials
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+
+      # Server settings
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3000}
+      GF_SERVER_DOMAIN: localhost
+
+      # Anonymous access (for development)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+
+      # Database (default SQLite for simplicity)
+      GF_DATABASE_TYPE: sqlite3
+
+      # Plugins
+      GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-clock-panel
+
+      # Disable telemetry
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # AlertManager - Alert routing and management
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: kessel-alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:${ALERTMANAGER_PORT:-9093}'
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ../alertmanager/config.yml:/etc/alertmanager/config.yml:ro
+      - alertmanager-data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  # Node Exporter - Host metrics
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: kessel-node-exporter
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "${NODE_EXPORTER_PORT:-9100}:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+
+  # Health Check Exporter - Converts health endpoints to Prometheus metrics
+  health-exporter:
+    build:
+      context: ../health-exporter
+      dockerfile: Dockerfile
+    image: kessel-health-exporter:latest
+    container_name: kessel-health-exporter
+    ports:
+      - "${HEALTH_EXPORTER_PORT:-9094}:9091"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:9091/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+volumes:
+  postgres-rbac-data:
+    driver: local
+    name: kessel-postgres-rbac-data
+  postgres-inventory-data:
+    driver: local
+    name: kessel-postgres-inventory-data
+  postgres-spicedb-data:
+    driver: local
+    name: kessel-postgres-spicedb-data
+  prometheus-data:
+    driver: local
+    name: kessel-prometheus-data
+  grafana-data:
+    driver: local
+    name: kessel-grafana-data
+  alertmanager-data:
+    driver: local
+    name: kessel-alertmanager-data
+
+networks:
+  kessel-network:
+    driver: bridge
+    name: kessel-network

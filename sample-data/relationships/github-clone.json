@@ -1,0 +1,82 @@
+[
+  {
+    "resource": "organization:acmecorp",
+    "relation": "admin",
+    "subject": "user:alice"
+  },
+  {
+    "resource": "organization:acmecorp",
+    "relation": "member",
+    "subject": "user:bob"
+  },
+  {
+    "resource": "organization:acmecorp",
+    "relation": "member",
+    "subject": "user:charlie"
+  },
+  {
+    "resource": "team:acmecorp/engineering",
+    "relation": "org",
+    "subject": "organization:acmecorp"
+  },
+  {
+    "resource": "team:acmecorp/engineering",
+    "relation": "member",
+    "subject": "user:bob"
+  },
+  {
+    "resource": "team:acmecorp/engineering",
+    "relation": "member",
+    "subject": "user:charlie"
+  },
+  {
+    "resource": "repository:acmecorp/backend",
+    "relation": "org",
+    "subject": "organization:acmecorp"
+  },
+  {
+    "resource": "repository:acmecorp/backend",
+    "relation": "admin",
+    "subject": "user:alice"
+  },
+  {
+    "resource": "repository:acmecorp/backend",
+    "relation": "writer",
+    "subject": "team:acmecorp/engineering#member"
+  },
+  {
+    "resource": "repository:acmecorp/frontend",
+    "relation": "org",
+    "subject": "organization:acmecorp"
+  },
+  {
+    "resource": "repository:acmecorp/frontend",
+    "relation": "reader",
+    "subject": "team:acmecorp/engineering#member"
+  },
+  {
+    "resource": "issue:acmecorp/backend/123",
+    "relation": "repo",
+    "subject": "repository:acmecorp/backend"
+  },
+  {
+    "resource": "issue:acmecorp/backend/123",
+    "relation": "author",
+    "subject": "user:bob"
+  },
+  {
+    "resource": "pr:acmecorp/backend/456",
+    "relation": "repo",
+    "subject": "repository:acmecorp/backend"
+  },
+  {
+    "resource": "pr:acmecorp/backend/456",
+    "relation": "author",
+    "subject": "user:charlie"
+  },
+  {
+    "resource": "pr:acmecorp/backend/456",
+    "relation": "reviewer",
+    "subject": "user:bob"
+  }
+]

@@ -1,0 +1,217 @@
+{
+  "principals": [
+    {
+      "username": "alice",
+      "email": "alice@acme-corp.com",
+      "first_name": "Alice",
+      "last_name": "Admin",
+      "account_number": "1234567",
+      "org_id": "acme-corp",
+      "is_org_admin": true,
+      "is_active": true,
+      "groups": [
+        {
+          "name": "org-admins",
+          "uuid": "550e8400-e29b-41d4-a716-446655440001"
+        }
+      ],
+      "roles": [
+        {
+          "name": "Organization Administrator",
+          "uuid": "550e8400-e29b-41d4-a716-446655440010"
+        }
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@acme-corp.com",
+      "first_name": "Bob",
+      "last_name": "Builder",
+      "account_number": "1234567",
+      "org_id": "acme-corp",
+      "is_org_admin": false,
+      "is_active": true,
+      "groups": [
+        {
+          "name": "sre-team",
+          "uuid": "550e8400-e29b-41d4-a716-446655440002"
+        },
+        {
+          "name": "developers",
+          "uuid": "550e8400-e29b-41d4-a716-446655440003"
+        }
+      ],
+      "roles": [
+        {
+          "name": "Workspace Administrator",
+          "uuid": "550e8400-e29b-41d4-a716-446655440011"
+        },
+        {
+          "name": "Host Operator",
+          "uuid": "550e8400-e29b-41d4-a716-446655440012"
+        }
+      ]
+    },
+    {
+      "username": "carol",
+      "email": "carol@acme-corp.com",
+      "first_name": "Carol",
+      "last_name": "Developer",
+      "account_number": "1234567",
+      "org_id": "acme-corp",
+      "is_org_admin": false,
+      "is_active": true,
+      "groups": [
+        {
+          "name": "developers",
+          "uuid": "550e8400-e29b-41d4-a716-446655440003"
+        },
+        {
+          "name": "qa-team",
+          "uuid": "550e8400-e29b-41d4-a716-446655440004"
+        }
+      ],
+      "roles": [
+        {
+          "name": "Developer",
+          "uuid": "550e8400-e29b-41d4-a716-446655440013"
+        },
+        {
+          "name": "Host Viewer",
+          "uuid": "550e8400-e29b-41d4-a716-446655440014"
+        }
+      ]
+    },
+    {
+      "username": "dave",
+      "email": "dave@acme-corp.com",
+      "first_name": "Dave",
+      "last_name": "DevOps",
+      "account_number": "1234567",
+      "org_id": "acme-corp",
+      "is_org_admin": false,
+      "is_active": true,
+      "groups": [
+        {
+          "name": "sre-team",
+          "uuid": "550e8400-e29b-41d4-a716-446655440002"
+        }
+      ],
+      "roles": [
+        {
+          "name": "Host Operator",
+          "uuid": "550e8400-e29b-41d4-a716-446655440012"
+        }
+      ]
+    },
+    {
+      "username": "eve",
+      "email": "eve@external-partner.com",
+      "first_name": "Eve",
+      "last_name": "External",
+      "account_number": "7654321",
+      "org_id": "partner-corp",
+      "is_org_admin": false,
+      "is_active": true,
+      "groups": [
+        {
+          "name": "external-users",
+          "uuid": "550e8400-e29b-41d4-a716-446655440005"
+        }
+      ],
+      "roles": [
+        {
+          "name": "Guest Viewer",
+          "uuid": "550e8400-e29b-41d4-a716-446655440015"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440001",
+      "name": "org-admins",
+      "description": "Organization administrators with full access",
+      "platform_default": false,
+      "system": true
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440002",
+      "name": "sre-team",
+      "description": "Site Reliability Engineering team",
+      "platform_default": false,
+      "system": false
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440003",
+      "name": "developers",
+      "description": "Development team members",
+      "platform_default": false,
+      "system": false
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440004",
+      "name": "qa-team",
+      "description": "Quality Assurance team",
+      "platform_default": false,
+      "system": false
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440005",
+      "name": "external-users",
+      "description": "External partner users with limited access",
+      "platform_default": false,
+      "system": false
+    }
+  ],
+  "roles": [
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440010",
+      "name": "Organization Administrator",
+      "description": "Full administrative access to the organization",
+      "system": true,
+      "platform_default": false,
+      "permissions": ["*:*:*"]
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440011",
+      "name": "Workspace Administrator",
+      "description": "Administrator for specific workspaces",
+      "system": false,
+      "platform_default": false,
+      "permissions": ["workspace:*:*", "host:read:*", "host:write:*"]
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440012",
+      "name": "Host Operator",
+      "description": "Can operate and manage hosts",
+      "system": false,
+      "platform_default": false,
+      "permissions": ["host:read:*", "host:write:*", "host:operate:*"]
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440013",
+      "name": "Developer",
+      "description": "Developer role with read/write access",
+      "system": false,
+      "platform_default": true,
+      "permissions": ["host:read:*", "workspace:read:*", "application:access:*"]
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440014",
+      "name": "Host Viewer",
+      "description": "Read-only access to host inventory",
+      "system": false,
+      "platform_default": false,
+      "permissions": ["host:read:*"]
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440015",
+      "name": "Guest Viewer",
+      "description": "Limited read-only access for external users",
+      "system": false,
+      "platform_default": false,
+      "permissions": ["host:read:public"]
+    }
+  ]
+}

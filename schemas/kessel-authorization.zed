@@ -1,0 +1,152 @@
+/**
+ * Kessel Authorization Schema
+ *
+ * This schema defines the authorization model for Kessel-in-a-Box,
+ * implementing relationship-based access control (ReBAC) for:
+ * - Workspaces (multi-tenant organization)
+ * - Users (subjects)
+ * - Resources (RHEL hosts, applications, etc.)
+ * - Roles (admin, viewer, editor)
+ */
+
+/**
+ * User definition
+ * Represents a user in the system
+ */
+definition user {}
+
+/**
+ * Workspace definition
+ * A workspace is a tenant/organization boundary that contains resources
+ *
+ * Relations:
+ * - owner: Users who own the workspace (full control)
+ * - admin: Users who can manage the workspace and its members
+ * - member: Users who are members of the workspace
+ * - viewer: Users who can only view workspace resources
+ *
+ * Permissions:
+ * - manage: Can manage workspace settings and memberships (owner + admin)
+ * - edit: Can modify workspace and resources (owner + admin + member)
+ * - view: Can view workspace and resources (all relations)
+ * - invite: Can invite new members (owner + admin)
+ * - delete: Can delete workspace (owner only)
+ */
+definition workspace {
+    relation owner: user
+    relation admin: user
+    relation member: user
+    relation viewer: user
+
+    permission manage = owner + admin
+    permission edit = owner + admin + member
+    permission view = owner + admin + member + viewer
+    permission invite = owner + admin
+    permission delete = owner
+}
+
+/**
+ * Role definition
+ * Represents an RBAC role that can be assigned to users
+ *
+ * Relations:
+ * - workspace: The workspace this role belongs to
+ * - assignee: Users who have been assigned this role
+ * - manager: Users who can manage this role (assign/revoke)
+ *
+ * Permissions:
+ * - assign: Can assign this role to users
+ * - revoke: Can revoke this role from users
+ * - view: Can view role details
+ */
+definition role {
+    relation workspace: workspace
+    relation assignee: user
+    relation manager: user
+
+    permission assign = manager + workspace->manage
+    permission revoke = manager + workspace->manage
+    permission view = assignee + manager + workspace->view
+}
+
+/**
+ * Resource definition (generic)
+ * Represents any resource in the system (hosts, apps, etc.)
+ *
+ * Relations:
+ * - workspace: The workspace this resource belongs to
+ * - owner: Direct owner of the resource
+ * - editor: Users who can edit this resource
+ * - viewer: Users who can view this resource
+ *
+ * Permissions:
+ * - delete: Can delete the resource (workspace owner/admin + resource owner)
+ * - edit: Can modify the resource (workspace edit + resource owner/editor)
+ * - view: Can view the resource (workspace view + resource viewer)
+ * - manage: Can manage resource permissions (workspace manage + resource owner)
+ */
+definition resource {
+    relation workspace: workspace
+    relation owner: user
+    relation editor: user
+    relation viewer: user
+
+    permission delete = workspace->manage + owner
+    permission edit = workspace->edit + owner + editor
+    permission view = workspace->view + owner + editor + viewer
+    permission manage = workspace->manage + owner
+}
+
+/**
+ * RHEL Host definition (specific resource type)
+ * Represents a Red Hat Enterprise Linux host
+ *
+ * Relations:
+ * - workspace: The workspace this host belongs to
+ * - owner: Direct owner of the host
+ * - administrator: Users who can administer this host
+ * - operator: Users who can operate this host (limited permissions)
+ *
+ * Permissions:
+ * - ssh: Can SSH into the host (workspace member + administrator + operator)
+ * - configure: Can configure the host (workspace admin + administrator)
+ * - reboot: Can reboot the host (workspace admin + administrator + operator)
+ * - view: Can view host details (workspace view + all host relations)
+ * - delete: Can delete the host (workspace manage + owner)
+ */
+definition rhel_host {
+    relation workspace: workspace
+    relation owner: user
+    relation administrator: user
+    relation operator: user
+
+    permission ssh = workspace->member + administrator + operator
+    permission configure = workspace->admin + administrator
+    permission reboot = workspace->admin + administrator + operator
+    permission view = workspace->view + owner + administrator + operator
+    permission delete = workspace->manage + owner
+}
+
+/**
+ * Group definition
+ * Represents a group of users for easier permission management
+ *
+ * Relations:
+ * - workspace: The workspace this group belongs to
+ * - member: Users who are members of this group
+ * - manager: Users who can manage this group
+ *
+ * Permissions:
+ * - add_member: Can add members to the group
+ * - remove_member: Can remove members from the group
+ * - view: Can view group details
+ */
+definition group {
+    relation workspace: workspace
+    relation member: user
+    relation manager: user
+
+    permission add_member = manager + workspace->manage
+    permission remove_member = manager + workspace->manage
+    permission view = member + manager + workspace->view
+}

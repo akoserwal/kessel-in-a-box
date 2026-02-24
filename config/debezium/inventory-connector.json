@@ -1,0 +1,46 @@
+{
+  "name": "inventory-postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres-inventory",
+    "database.port": "5432",
+    "database.user": "inventory",
+    "database.password": "secretpassword",
+    "database.dbname": "inventory",
+    "database.server.name": "inventory",
+    "topic.prefix": "inventory",
+    "schema.include.list": "inventory",
+    "table.include.list": "inventory.hosts,inventory.host_groups,inventory.tags",
+    
+    "plugin.name": "pgoutput",
+    "slot.name": "debezium_inventory",
+    "publication.name": "dbz_publication_inventory",
+    "publication.autocreate.mode": "filtered",
+    
+    "tasks.max": "1",
+    "poll.interval.ms": "1000",
+    
+    "snapshot.mode": "initial",
+    "snapshot.locking.mode": "none",
+    
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    
+    "transforms": "route,unwrap",
+    "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.route.regex": "([^.]+)\\.([^.]+)\\.([^.]+)",
+    "transforms.route.replacement": "$1.$3.events",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,table,lsn,source.ts_ms",
+    
+    "tombstones.on.delete": "true",
+    "provide.transaction.metadata": "false",
+    
+    "heartbeat.interval.ms": "10000",
+    "heartbeat.action.query": "INSERT INTO inventory.debezium_heartbeat (id, ts) VALUES (1, NOW()) ON CONFLICT (id) DO UPDATE SET ts = EXCLUDED.ts"
+  }
+}

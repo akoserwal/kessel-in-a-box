@@ -1,0 +1,75 @@
+/**
+ * Google Drive Clone Authorization Schema
+ *
+ * Models a hierarchical document storage system:
+ * - Folders contain documents and other folders
+ * - Documents can be shared with users
+ * - Users can have different access levels (viewer, editor, owner)
+ */
+
+// User: A user in the system (implicit definition)
+definition user {}
+
+// Folder: A container for documents and other folders
+definition folder {
+    // Relations
+    relation parent: folder
+    relation owner: user
+    relation editor: user
+    relation viewer: user
+
+    // Permissions
+    // view: viewers, editors, owners, or anyone who can view the parent
+    permission view = viewer + editor + owner + parent->view
+
+    // edit: editors, owners, or anyone who can edit the parent
+    permission edit = editor + owner + parent->edit
+
+    // delete: only owners or anyone who can delete the parent
+    permission delete = owner + parent->delete
+
+    // share: only owners can share
+    permission share = owner
+
+    // create_child: editors and owners can create children
+    permission create_child = editor + owner
+}
+
+// Document: A file in the system
+definition document {
+    // Relations
+    relation parent: folder
+    relation owner: user
+    relation editor: user
+    relation viewer: user
+    relation commenter: user
+
+    // Permissions
+    // view: viewers, commenters, editors, owners, or anyone who can view the parent folder
+    permission view = viewer + commenter + editor + owner + parent->view
+
+    // comment: commenters, editors, owners
+    permission comment = commenter + editor + owner
+
+    // edit: editors, owners, or anyone who can edit the parent
+    permission edit = editor + owner + parent->edit
+
+    // delete: only owners
+    permission delete = owner
+
+    // share: only owners can share
+    permission share = owner
+
+    // move: owners or anyone who can edit the parent
+    permission move = owner + parent->edit
+}
+
+// Shared Link: A publicly accessible link to a document
+definition shared_link {
+    // Relations
+    relation document: document
+
+    // Permissions
+    permission view = document->owner
+    permission revoke = document->owner
+}

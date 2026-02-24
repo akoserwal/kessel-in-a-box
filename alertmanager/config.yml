@@ -1,0 +1,26 @@
+# AlertManager Configuration for Kessel-in-a-Box
+
+global:
+  resolve_timeout: 5m
+
+# Route tree for notifications
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'null'
+
+# Receivers configuration
+receivers:
+  - name: 'null'
+    # No-op receiver for development
+    # In production, configure webhooks, email, Slack, etc.
+
+# Inhibition rules (suppress alerts)
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']

@@ -1,0 +1,82 @@
+/**
+ * GitHub Clone Authorization Schema
+ *
+ * This schema models GitHub's permission system:
+ * - Organizations contain repositories
+ * - Teams belong to organizations
+ * - Users can be members of teams
+ * - Repositories have readers, writers, and admins
+ * - Teams can have access to repositories
+ */
+
+// Organization: A collection of repositories and teams
+definition organization {
+    // Relations
+    relation member: user
+    relation admin: user
+
+    // Permissions
+    permission create_repo = admin
+    permission view_repo = member + admin
+}
+
+// Team: A group of users within an organization
+definition team {
+    // Relations
+    relation member: user
+    relation org: organization
+
+    // Permissions
+    permission view = member + org->admin
+    permission manage = org->admin
+}
+
+// Repository: A code repository
+definition repository {
+    // Relations
+    relation reader: user | team#member
+    relation writer: user | team#member
+    relation admin: user | team#member
+    relation org: organization
+
+    // Permissions
+    // read: readers, writers, admins, or org admins can read
+    permission read = reader + writer + admin + org->admin
+
+    // write: writers, admins, or org admins can write
+    permission write = writer + admin + org->admin
+
+    // delete: only admins or org admins can delete
+    permission delete = admin + org->admin
+
+    // manage_access: only admins or org admins can manage access
+    permission manage_access = admin + org->admin
+}
+
+// Issue: An issue in a repository
+definition issue {
+    // Relations
+    relation repo: repository
+    relation author: user
+    relation assignee: user
+
+    // Permissions
+    permission view = repo->read
+    permission edit = author + repo->write
+    permission close = repo->write
+    permission assign = repo->write
+}
+
+// Pull Request: A pull request in a repository
+definition pr {
+    // Relations
+    relation repo: repository
+    relation author: user
+    relation reviewer: user
+
+    // Permissions
+    permission view = repo->read
+    permission comment = repo->read
+    permission approve = reviewer + repo->write
+    permission merge = repo->write
+}

@@ -1,0 +1,220 @@
+/**
+ * Kessel Schema for Insights RBAC
+ *
+ * This schema models Red Hat Insights RBAC using Kessel's ReBAC model.
+ * It demonstrates migration from traditional RBAC to relationship-based access control.
+ *
+ * Key concepts:
+ * - Organizations: Top-level tenant isolation
+ * - Workspaces: Project/team grouping within organizations
+ * - Roles: Permission bundles (admin, viewer, editor)
+ * - Users: Principals that can be assigned roles
+ * - Groups: Collections of users for bulk permission management
+ * - Resources: Applications, services, and features
+ */
+
+/**
+ * Organization Definition
+ * Represents a Red Hat customer account/organization
+ */
+definition organization {
+    // Direct relationships
+    relation admin: user | group#member
+    relation member: user | group#member
+
+    // Computed permissions
+    permission manage = admin
+    permission view = member + admin
+    permission invite_user = admin
+}
+
+/**
+ * Workspace Definition
+ * Logical grouping within an organization (like a project or team)
+ */
+definition workspace {
+    // Parent organization
+    relation org: organization
+
+    // Role assignments
+    relation owner: user | group#member
+    relation admin: user | group#member
+    relation editor: user | group#member
+    relation viewer: user | group#member
+
+    // Computed permissions with inheritance from org
+    permission manage = owner + admin + org->admin
+    permission edit = editor + manage
+    permission view = viewer + edit + org->view
+    permission delete = owner + org->admin
+    permission invite = owner + admin
+}
+
+/**
+ * Group Definition
+ * User groups for bulk permission assignment
+ */
+definition group {
+    // Parent relationships
+    relation org: organization
+    relation workspace: workspace
+
+    // Members
+    relation member: user | group#member
+    relation admin: user
+
+    // Computed permissions
+    permission add_member = admin + org->admin
+    permission remove_member = admin + org->admin
+    permission view = member + admin + org->view
+}
+
+/**
+ * Role Definition
+ * Traditional RBAC role mapped to ReBAC
+ * Roles contain permissions for specific resources
+ */
+definition role {
+    // Scope
+    relation org: organization
+    relation workspace: workspace
+
+    // Role assignment
+    relation assignee: user | group#member
+
+    // Permissions included in this role
+    relation granted_permission: permission_grant
+
+    // Who can manage this role
+    relation admin: user
+
+    // Computed permissions
+    permission assign = admin + org->admin
+    permission unassign = admin + org->admin
+    permission modify = admin + org->admin
+    permission view = assignee + admin + org->view
+}
+
+/**
+ * Permission Definition
+ * Granular permission that can be bundled into roles
+ */
+definition permission_grant {
+    // Scoping
+    relation org: organization
+    relation application: application
+
+    // Who has this permission
+    relation granted_to: user | group#member | role#assignee
+
+    // Permission management
+    relation admin: user
+
+    // Usage
+    permission use = granted_to + admin + org->admin
+}
+
+/**
+ * Application Definition
+ * An Insights application/service (e.g., Advisor, Vulnerability, Patch)
+ */
+definition application {
+    // Organizational scope
+    relation org: organization
+
+    // Access levels
+    relation owner: user
+    relation admin: user | group#member
+    relation user: user | group#member
+
+    // Features within the application
+    relation feature: feature
+
+    // Computed permissions
+    permission manage = owner + admin + org->admin
+    permission access = user + manage
+    permission configure = admin + owner
+}
+
+/**
+ * Feature Definition
+ * Specific feature within an application
+ */
+definition feature {
+    // Parent application
+    relation app: application
+
+    // Feature-level access
+    relation enabled_for: user | group#member | role#assignee
+
+    // Computed permissions
+    permission use = enabled_for + app->manage
+    permission configure = app->admin
+}
+
+/**
+ * Resource Definition
+ * Generic resource that can have RBAC applied
+ */
+definition resource {
+    // Organizational hierarchy
+    relation org: organization
+    relation workspace: workspace
+
+    // Resource ownership
+    relation owner: user
+
+    // Role-based access
+    relation admin: user | group#member | role#assignee
+    relation editor: user | group#member | role#assignee
+    relation viewer: user | group#member | role#assignee
+
+    // Computed permissions
+    permission delete = owner + org->admin
+    permission write = editor + admin + owner + workspace->edit
+    permission read = viewer + write + workspace->view
+    permission share = admin + owner
+}
+
+/**
+ * User Definition
+ * Individual user/principal in the system
+ */
+definition user {}
+
+/**
+ * Example Relationship Structure:
+ *
+ * organization:redhat
+ *   ├─ admin: user:alice
+ *   ├─ member: user:bob, user:carol
+ *   └─ workspaces
+ *       ├─ workspace:platform-team
+ *       │   ├─ org: organization:redhat
+ *       │   ├─ owner: user:alice
+ *       │   ├─ editor: group:developers#member
+ *       │   └─ viewer: group:qa-team#member
+ *       └─ workspace:security-team
+ *           ├─ org: organization:redhat
+ *           └─ admin: user:carol
+ *
+ * group:developers
+ *   ├─ org: organization:redhat
+ *   ├─ workspace: workspace:platform-team
+ *   ├─ admin: user:alice
+ *   └─ member: user:bob, user:dave
+ *
+ * application:advisor
+ *   ├─ org: organization:redhat
+ *   ├─ owner: user:alice
+ *   └─ user: group:developers#member
+ *
+ * Permission Check Examples:
+ * - Can user:bob edit workspace:platform-team?
+ *   → workspace:platform-team#edit@user:bob
+ *   → YES (bob is in group:developers which has editor role)
+ *
+ * - Can user:carol access application:advisor?
+ *   → application:advisor#access@user:carol
+ *   → YES (carol is org admin, which grants access to all apps)
+ */

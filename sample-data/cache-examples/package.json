@@ -1,0 +1,25 @@
+{
+  "name": "kessel-cache-examples",
+  "version": "1.0.0",
+  "description": "Redis caching examples for Kessel authorization",
+  "main": "permission-cache.js",
+  "scripts": {
+    "example:permission": "node permission-cache.js",
+    "test": "echo \"Error: no test command yet\" && exit 1"
+  },
+  "dependencies": {
+    "@authzed/authzed-node": "^0.10.0",
+    "@grpc/grpc-js": "^1.9.0",
+    "ioredis": "^5.3.2"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "kessel",
+    "redis",
+    "caching",
+    "authorization",
+    "spicedb"
+  ],
+  "author": "Kessel",
+  "license": "MIT"
+}

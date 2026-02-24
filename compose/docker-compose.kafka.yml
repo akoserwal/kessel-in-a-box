@@ -1,0 +1,271 @@
+# Kessel-in-a-Box: Event Streaming (Phase 6)
+# Kafka + Zookeeper for CDC pipeline
+
+services:
+  # Zookeeper - Kafka dependency
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: kessel-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181", "|", "grep", "imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Kafka - Event streaming platform
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kessel-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+      - "${KAFKA_JMX_PORT:-9101}:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # Listener configuration
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Topic defaults
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DELETE_TOPIC_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Performance tuning for local dev
+      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824  # 1GB
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000  # 5 minutes
+      KAFKA_COMPRESSION_TYPE: snappy
+
+      # JMX metrics
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+
+      # Logging
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Kafka Connect - For Debezium CDC connectors
+  kafka-connect:
+    image: debezium/connect:2.4
+    container_name: kessel-kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-rbac:
+        condition: service_healthy
+      postgres-inventory:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_CONNECT_PORT:-8084}:8083"
+    environment:
+      # Kafka connection
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: kessel-connect-cluster
+      CONFIG_STORAGE_TOPIC: connect-configs
+      OFFSET_STORAGE_TOPIC: connect-offsets
+      STATUS_STORAGE_TOPIC: connect-status
+
+      # Replication factors (1 for single broker)
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+
+      # Connector configuration
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+      # Logging
+      LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Kafka UI - Web interface for Kafka management (optional)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kessel-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_UI_PORT:-8086}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kessel-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: kessel-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # RBAC Consumer - Production-ready consumer for RBAC events
+  # Replaces relations-sink with Red Hat Insights RBAC consumer patterns
+  rbac-consumer:
+    build:
+      context: ../consumers/rbac-consumer
+      dockerfile: Dockerfile
+    container_name: kessel-rbac-consumer
+    extra_hosts:
+      - "kessel-relations-api:${DOCKER_HOST_IP:-host-gateway}"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kessel-relations-api:
+        condition: service_healthy
+    ports:
+      - "${RBAC_CONSUMER_METRICS_PORT:-9095}:9090"  # Prometheus metrics (changed from 9091 to avoid conflict with Prometheus)
+    environment:
+      # Kafka configuration
+      KAFKA_BROKERS: kafka:29092
+      RBAC_KAFKA_CONSUMER_GROUP_ID: rbac-consumer-group
+
+      # Topics
+      RBAC_KAFKA_CONSUMER_TOPIC_WORKSPACES: rbac.workspaces.events
+      RBAC_KAFKA_CONSUMER_TOPIC_ROLES: rbac.roles.events
+
+      # Relations API
+      KESSEL_RELATIONS_API_URL: http://kessel-relations-api:8000
+
+      # Metrics
+      METRICS_PORT: "9090"
+    networks:
+      - kessel-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/kubernetes-liveness"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Inventory Consumer - Official production-ready consumer from project-kessel
+  # Repository: https://github.com/project-kessel/inventory-consumer
+  # Built locally from source (official image is AMD64 only, kessel-in-a-box supports ARM64)
+  inventory-consumer:
+    build:
+      context: ../consumers/inventory-consumer
+      dockerfile: Dockerfile
+      args:
+        VERSION: latest
+    container_name: kessel-inventory-consumer
+    extra_hosts:
+      - "kessel-inventory-api:${DOCKER_HOST_IP:-host-gateway}"
+    command: ["start"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kessel-inventory-api:
+        condition: service_healthy
+    environment:
+      # Config file location inside container
+      INVENTORY_CONSUMER_CONFIG: /config.yaml
+    volumes:
+      # Mount config file (adapted for kessel-in-a-box)
+      - ../consumers/inventory-consumer/config.yaml:/config.yaml:ro
+    networks:
+      - kessel-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+volumes:
+  zookeeper-data:
+    driver: local
+    name: kessel-zookeeper-data
+  zookeeper-logs:
+    driver: local
+    name: kessel-zookeeper-logs
+  kafka-data:
+    driver: local
+    name: kessel-kafka-data
+
+networks:
+  kessel-network:
+    external: true
+    name: kessel-network

@@ -1,0 +1,275 @@
+/**
+ * Kessel Schema for Insights Host Inventory
+ *
+ * This schema models authorization for host inventory management.
+ * It demonstrates resource-based access control for infrastructure assets.
+ *
+ * Key concepts:
+ * - Organizations: Customer accounts
+ * - Workspaces: Environment grouping (prod, staging, dev)
+ * - Host Groups: Logical grouping of systems
+ * - Hosts: Individual systems/servers
+ * - Tags: Metadata for fine-grained filtering
+ * - Resource-level permissions with inheritance
+ */
+
+/**
+ * Organization Definition
+ * Top-level tenant isolation for multi-tenancy
+ */
+definition organization {
+    // Organization roles
+    relation admin: user | group#member
+    relation member: user | group#member
+    relation billing_admin: user
+
+    // Computed permissions
+    permission manage = admin
+    permission view_all_hosts = admin + member
+    permission manage_billing = billing_admin + admin
+}
+
+/**
+ * Workspace Definition
+ * Environment or project workspace (e.g., production, staging)
+ */
+definition workspace {
+    // Parent organization
+    relation org: organization
+
+    // Workspace roles
+    relation owner: user
+    relation admin: user | group#member
+    relation operator: user | group#member
+    relation viewer: user | group#member
+
+    // Computed permissions with org inheritance
+    permission manage = owner + admin + org->admin
+    permission operate = operator + manage
+    permission view = viewer + operate + org->view_all_hosts
+    permission delete = owner + org->admin
+    permission create_host = operator + admin + owner
+    permission delete_host = admin + owner
+}
+
+/**
+ * Host Group Definition
+ * Logical grouping of hosts (e.g., web-servers, databases)
+ */
+definition host_group {
+    // Hierarchy
+    relation org: organization
+    relation workspace: workspace
+
+    // Group management
+    relation owner: user
+    relation admin: user | group#member
+
+    // Members
+    relation member: user | group#member
+
+    // Computed permissions
+    permission manage = owner + admin + workspace->admin
+    permission add_host = admin + owner + workspace->create_host
+    permission remove_host = admin + owner
+    permission view = member + manage + workspace->view
+    permission operate_hosts = member + admin + workspace->operate
+}
+
+/**
+ * Host Definition
+ * Individual system/server in the inventory
+ */
+definition host {
+    // Organizational hierarchy
+    relation org: organization
+    relation workspace: workspace
+    relation host_group: host_group
+
+    // Host ownership and access
+    relation owner: user
+    relation admin: user | group#member
+    relation operator: user | group#member
+    relation viewer: user | group#member
+
+    // System profile access
+    relation can_view_system_profile: user | group#member
+
+    // Facts access (sensitive data)
+    relation can_view_facts: user | group#member
+
+    // Computed permissions with multi-level inheritance
+    permission delete = owner + workspace->delete_host + org->admin
+    permission update = admin + owner + operator + workspace->operate
+    permission read = viewer + update + workspace->view
+    permission read_system_profile = can_view_system_profile + admin + owner
+    permission read_facts = can_view_facts + owner + org->admin
+    permission assign_to_group = admin + owner + workspace->admin
+    permission apply_tags = operator + admin + owner
+}
+
+/**
+ * Tag Definition
+ * Metadata tags for hosts (key:value pairs)
+ */
+definition tag {
+    // Scope
+    relation org: organization
+    relation namespace: tag_namespace
+
+    // Who can use this tag
+    relation can_apply: user | group#member | role#assignee
+
+    // Tag management
+    relation admin: user
+
+    // Computed permissions
+    permission apply = can_apply + admin + org->admin
+    permission remove = admin + org->admin
+    permission view = can_apply + admin + org->view_all_hosts
+}
+
+/**
+ * Tag Namespace Definition
+ * Namespace for organizing tags (e.g., environment, cost-center)
+ */
+definition tag_namespace {
+    // Organizational scope
+    relation org: organization
+
+    // Namespace management
+    relation admin: user | group#member
+
+    // Computed permissions
+    permission manage = admin + org->admin
+    permission create_tag = admin + org->admin
+}
+
+/**
+ * System Profile Template Definition
+ * Template defining what system information can be collected
+ */
+definition system_profile_template {
+    // Scope
+    relation org: organization
+
+    // Access control
+    relation admin: user
+    relation can_use: user | group#member | role#assignee
+
+    // Computed permissions
+    permission use = can_use + admin + org->admin
+    permission modify = admin + org->admin
+}
+
+/**
+ * Group Definition (reused from RBAC)
+ * User groups for bulk permission assignment
+ */
+definition group {
+    // Parent relationships
+    relation org: organization
+
+    // Members
+    relation member: user | group#member
+    relation admin: user
+
+    // Computed permissions
+    permission add_member = admin + org->admin
+    permission remove_member = admin + org->admin
+    permission view = member + admin + org->view_all_hosts
+}
+
+/**
+ * Role Definition (for integration with RBAC)
+ * Allows role-based permissions from RBAC system
+ */
+definition role {
+    // Scope
+    relation org: organization
+
+    // Role assignment
+    relation assignee: user | group#member
+
+    // Role management
+    relation admin: user
+
+    // Computed permissions
+    permission assign = admin + org->admin
+}
+
+/**
+ * User Definition
+ * Individual user/principal
+ */
+definition user {}
+
+/**
+ * Example Relationship Structure:
+ *
+ * organization:acme-corp
+ *   ├─ admin: user:alice
+ *   ├─ member: user:bob, user:carol
+ *   └─ workspaces
+ *       ├─ workspace:production
+ *       │   ├─ org: organization:acme-corp
+ *       │   ├─ owner: user:alice
+ *       │   ├─ operator: group:sre-team#member
+ *       │   └─ viewer: group:developers#member
+ *       └─ workspace:staging
+ *           ├─ org: organization:acme-corp
+ *           └─ admin: user:bob
+ *
+ * host_group:web-servers
+ *   ├─ org: organization:acme-corp
+ *   ├─ workspace: workspace:production
+ *   ├─ owner: user:alice
+ *   ├─ admin: group:sre-team#member
+ *   └─ member: group:developers#member
+ *
+ * host:web-01.acme.com
+ *   ├─ org: organization:acme-corp
+ *   ├─ workspace: workspace:production
+ *   ├─ host_group: host_group:web-servers
+ *   ├─ owner: user:alice
+ *   ├─ operator: group:sre-team#member
+ *   ├─ viewer: group:developers#member
+ *   ├─ can_view_system_profile: group:developers#member
+ *   └─ can_view_facts: group:sre-team#member
+ *
+ * tag_namespace:environment
+ *   ├─ org: organization:acme-corp
+ *   └─ admin: user:alice
+ *
+ * tag:production
+ *   ├─ org: organization:acme-corp
+ *   ├─ namespace: tag_namespace:environment
+ *   ├─ admin: user:alice
+ *   └─ can_apply: group:sre-team#member
+ *
+ * Permission Check Examples:
+ *
+ * 1. Can user:bob update host:web-01.acme.com?
+ *    → host:web-01.acme.com#update@user:bob
+ *    → Check: Is bob an operator of workspace:production?
+ *    → YES if bob is in group:sre-team
+ *
+ * 2. Can user:carol view system profile of host:web-01.acme.com?
+ *    → host:web-01.acme.com#read_system_profile@user:carol
+ *    → Check: Is carol in can_view_system_profile or admin?
+ *    → Depends on group membership
+ *
+ * 3. Can user:alice delete host:web-01.acme.com?
+ *    → host:web-01.acme.com#delete@user:alice
+ *    → YES (alice is owner and org admin)
+ *
+ * 4. Can user:bob apply tag:production to a host in workspace:production?
+ *    → tag:production#apply@user:bob
+ *    → Check: Is bob in can_apply or admin?
+ *    → YES if bob is in group:sre-team
+ *
+ * Integration with RBAC:
+ * - Roles from RBAC can be granted permissions here
+ * - Groups are shared between RBAC and Inventory
+ * - Organization admin has full access across both systems
+ */

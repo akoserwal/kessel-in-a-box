@@ -1,0 +1,215 @@
+# Prometheus Alert Rules for Kessel-in-a-Box
+
+groups:
+  # SpiceDB Alerts
+  - name: spicedb
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: SpiceDBHighErrorRate
+        expr: |
+          rate(spicedb_grpc_server_handled_total{grpc_code!="OK"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: spicedb
+        annotations:
+          summary: "SpiceDB high error rate"
+          description: "SpiceDB is experiencing {{ $value | humanizePercentage }} error rate"
+
+      # High latency
+      - alert: SpiceDBHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(spicedb_grpc_server_handling_seconds_bucket[5m])
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: spicedb
+        annotations:
+          summary: "SpiceDB high latency"
+          description: "SpiceDB p99 latency is {{ $value }}s"
+
+      # Service down
+      - alert: SpiceDBDown
+        expr: up{job="spicedb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: spicedb
+        annotations:
+          summary: "SpiceDB is down"
+          description: "SpiceDB has been down for more than 1 minute"
+
+  # Redis Cache Alerts
+  - name: redis
+    interval: 30s
+    rules:
+      # Low hit rate
+      - alert: RedisLowHitRate
+        expr: |
+          (
+            rate(redis_keyspace_hits_total[5m]) /
+            (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))
+          ) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis low cache hit rate"
+          description: "Redis cache hit rate is {{ $value | humanizePercentage }}"
+
+      # High memory usage
+      - alert: RedisHighMemory
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      # High eviction rate
+      - alert: RedisHighEvictionRate
+        expr: |
+          rate(redis_evicted_keys_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis high eviction rate"
+          description: "Redis is evicting {{ $value }} keys/second"
+
+      # Service down
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 1 minute"
+
+  # PostgreSQL Alerts
+  - name: postgres
+    interval: 30s
+    rules:
+      # Too many connections
+      - alert: PostgresTooManyConnections
+        expr: |
+          sum(pg_stat_activity_count) / sum(pg_settings_max_connections) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: "PostgreSQL too many connections"
+          description: "PostgreSQL connection usage is {{ $value | humanizePercentage }}"
+
+      # Replication lag
+      - alert: PostgresReplicationLag
+        expr: |
+          pg_replication_lag > 30
+        for: 5m
+        labels:
+          severity: warning
+          component: postgres
+        annotations:
+          summary: "PostgreSQL replication lag"
+          description: "PostgreSQL replication lag is {{ $value }}s"
+
+      # Service down
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: postgres
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL has been down for more than 1 minute"
+
+  # Kafka Alerts
+  - name: kafka
+    interval: 30s
+    rules:
+      # High consumer lag
+      - alert: KafkaHighConsumerLag
+        expr: |
+          kafka_consumergroup_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka high consumer lag"
+          description: "Kafka consumer lag is {{ $value }} messages"
+
+      # Under-replicated partitions
+      - alert: KafkaUnderReplicatedPartitions
+        expr: |
+          kafka_server_replicamanager_underreplicatedpartitions > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka under-replicated partitions"
+          description: "{{ $value }} partitions are under-replicated"
+
+      # Service down
+      - alert: KafkaDown
+        expr: up{job="kafka"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka is down"
+          description: "Kafka has been down for more than 1 minute"
+
+  # System Alerts
+  - name: system
+    interval: 30s
+    rules:
+      # High CPU
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}%"
+
+      # High memory
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}%"
+
+      # Low disk space
+      - alert: LowDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space available is {{ $value }}%"

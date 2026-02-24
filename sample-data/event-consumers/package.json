@@ -1,0 +1,16 @@
+{
+  "name": "kessel-event-consumers",
+  "version": "1.0.0",
+  "description": "Sample event consumers for Kessel CDC events",
+  "main": "relationship-consumer.js",
+  "scripts": {
+    "consume:relationships": "node relationship-consumer.js",
+    "consume:schemas": "node schema-consumer.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {},
+  "author": "Kessel",
+  "license": "MIT"
+}

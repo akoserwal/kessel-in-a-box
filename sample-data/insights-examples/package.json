@@ -1,0 +1,27 @@
+{
+  "name": "kessel-insights-integration-examples",
+  "version": "1.0.0",
+  "description": "Integration examples for Red Hat Insights services with Kessel",
+  "main": "index.js",
+  "scripts": {
+    "demo:rbac": "node rbac-integration.js",
+    "demo:inventory": "node inventory-integration.js",
+    "demo:all": "npm run demo:rbac && npm run demo:inventory"
+  },
+  "keywords": [
+    "kessel",
+    "spicedb",
+    "insights",
+    "rbac",
+    "inventory",
+    "authorization"
+  ],
+  "author": "Kessel Team",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@authzed/authzed-node": "^0.10.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

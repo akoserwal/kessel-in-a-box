@@ -1,0 +1,34 @@
+# Build stage
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o kessel-relations-api .
+
+# Runtime stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates wget
+
+# Install grpc_health_probe for health checks
+RUN wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.24/grpc_health_probe-linux-amd64 && \
+    chmod +x /bin/grpc_health_probe
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/kessel-relations-api .
+
+# Expose ports
+EXPOSE 8000 9000
+
+# Run the binary
+CMD ["./kessel-relations-api"]

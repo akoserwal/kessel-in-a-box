@@ -1,0 +1,135 @@
+# Kessel-in-a-Box: Kessel Services (Phase 5)
+# kessel-relations-api and kessel-inventory-api
+# Note: Redis removed to match production architecture
+
+services:
+  # Kessel Relations API - Authorization service (talks to SpiceDB)
+  # CRITICAL: This is the ONLY service that talks to SpiceDB directly
+  kessel-relations-api:
+    build:
+      context: ../services/kessel-relations-api
+      dockerfile: Dockerfile
+    container_name: kessel-relations-api
+    ports:
+      - "${KESSEL_RELATIONS_PORT:-8082}:8000"  # HTTP/gRPC (multiplexed)
+      - "${KESSEL_RELATIONS_METRICS_PORT:-9001}:9000"  # Prometheus metrics
+    environment:
+      # SpiceDB connection (ONLY relations-api has this!)
+      SPICEDB_ENDPOINT: spicedb:50051
+      SPICEDB_TOKEN: ${SPICEDB_PRESHARED_KEY:-testtesttesttest}
+      SPICEDB_INSECURE: "true"
+
+      # Authentication
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+
+      # Observability
+      LOG_LEVEL: ${KESSEL_RELATIONS_LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_ENDPOINT:-}
+
+      # Server configuration
+      SERVER_PORT: "8000"
+      METRICS_PORT: "9000"
+      ENABLE_GRPC: "true"
+      ENABLE_HTTP: "true"
+
+      # Performance tuning
+      MAX_CONNECTION_AGE: 30m
+      MAX_CONNECTION_AGE_GRACE: 5m
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Kessel Inventory API - Resource management + Authorization proxy
+  # CRITICAL: Depends on relations-api for all authorization calls!
+  kessel-inventory-api:
+    build:
+      context: ../services/kessel-inventory-api
+      dockerfile: Dockerfile
+    container_name: kessel-inventory-api
+    extra_hosts:
+      - "kessel-relations-api:${DOCKER_HOST_IP:-host-gateway}"
+    ports:
+      - "${KESSEL_INVENTORY_PORT:-8083}:8000"  # HTTP/gRPC (multiplexed)
+      - "${KESSEL_INVENTORY_METRICS_PORT:-9002}:9000"  # Prometheus metrics
+    environment:
+      # CRITICAL: Points to relations-api, NOT SpiceDB directly!
+      KESSEL_RELATIONS_ENDPOINT: http://kessel-relations-api:8000
+      KESSEL_RELATIONS_INSECURE: "true"
+
+      # PostgreSQL - Resource storage
+      POSTGRES_HOST: postgres-inventory
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      POSTGRES_SSLMODE: disable
+
+      # Kafka - Event publishing
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      KAFKA_TOPIC_INVENTORY_EVENTS: inventory.resource.events
+      KAFKA_ENABLED: "true"
+
+      # Authentication
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+
+      # Observability
+      LOG_LEVEL: ${KESSEL_INVENTORY_LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_ENDPOINT:-}
+
+      # Server configuration
+      SERVER_PORT: "8000"
+      METRICS_PORT: "9000"
+      ENABLE_GRPC: "true"
+      ENABLE_HTTP: "true"
+
+      # Performance tuning
+      MAX_CONNECTION_AGE: 30m
+      MAX_CONNECTION_AGE_GRACE: 5m
+      DB_MAX_OPEN_CONNS: "25"
+      DB_MAX_IDLE_CONNS: "5"
+    depends_on:
+      kessel-relations-api:
+        condition: service_healthy  # MUST wait for relations-api!
+      postgres-inventory:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+networks:
+  kessel-network:
+    external: true
+    name: kessel-network

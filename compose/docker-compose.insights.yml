@@ -1,0 +1,97 @@
+# Kessel-in-a-Box: Insights Services (Phase 7)
+# Mock implementations of insights-rbac and insights-host-inventory
+# Demonstrates CDC integration with Kessel
+
+services:
+  # Insights RBAC Service - Workspace and Role Management
+  # Writes to RBAC PostgreSQL → CDC → Kafka → Relations Sink → Relations API
+  insights-rbac:
+    build:
+      context: ../services/insights-rbac
+      dockerfile: Dockerfile
+    container_name: insights-rbac
+    ports:
+      - "${INSIGHTS_RBAC_PORT:-8080}:8080"
+    environment:
+      # PostgreSQL RBAC database
+      POSTGRES_HOST: postgres-rbac
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: rbac
+      POSTGRES_USER: rbac
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      
+      # Logging
+      LOG_LEVEL: INFO
+      FLASK_ENV: production
+    depends_on:
+      postgres-rbac:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Insights Host Inventory Service - Host Management
+  # Dual-write pattern: Own DB + Direct API call to kessel-inventory-api
+  # Also triggers CDC: Inventory PostgreSQL → Debezium → Kafka → Inventory Consumer
+  insights-host-inventory:
+    build:
+      context: ../services/insights-host-inventory
+      dockerfile: Dockerfile
+    container_name: insights-host-inventory
+    extra_hosts:
+      - "kessel-inventory-api:${DOCKER_HOST_IP:-host-gateway}"
+    ports:
+      - "${INSIGHTS_INVENTORY_PORT:-8081}:8081"
+    environment:
+      # PostgreSQL Inventory database
+      POSTGRES_HOST: postgres-inventory
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
+      
+      # Kessel Inventory API (for direct calls)
+      KESSEL_INVENTORY_API_URL: http://kessel-inventory-api:8000
+      
+      # Logging
+      LOG_LEVEL: INFO
+      FLASK_ENV: production
+    depends_on:
+      postgres-inventory:
+        condition: service_healthy
+      kessel-inventory-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - kessel-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+networks:
+  kessel-network:
+    external: true
+    name: kessel-network

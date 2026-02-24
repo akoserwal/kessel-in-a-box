@@ -1,0 +1,40 @@
+# Kessel Inventory Consumer Configuration
+# Adapted for kessel-in-a-box from official project-kessel/inventory-consumer
+
+consumer:
+  # Kafka connection
+  bootstrap-servers: ["kafka:29092"]
+
+  # Commit frequency (commit every 300 messages)
+  commit-modulo: 300
+
+  # Note: Consumer group ID is hardcoded in official consumer as "kic"
+  # Cannot be changed via config file
+
+  # Topics to consume (kessel-in-a-box topic naming)
+  topics:
+    - inventory.hosts.events
+    - inventory.host_groups.events
+    - inventory.tags.events
+
+  # Retry configuration
+  retry-options:
+    consumer-max-retries: -1          # Unlimited retries
+    operation-max-retries: -1         # Unlimited operation retries
+    backoff-factor: 5                 # Exponential backoff multiplier
+    max-backoff-seconds: 30           # Maximum wait between retries
+
+  # Kafka authentication (disabled for local dev)
+  auth:
+    enabled: false
+
+# Inventory API client configuration
+client:
+  enabled: true
+  url: "http://kessel-inventory-api:8000"
+  enable-oidc-auth: false             # No OAuth for local dev
+  insecure-client: true               # Skip TLS verification for local dev
+
+# Logging configuration
+log:
+  level: "info"

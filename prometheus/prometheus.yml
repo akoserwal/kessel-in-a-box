@@ -1,0 +1,103 @@
+# Prometheus Configuration for Kessel-in-a-Box
+# Scrapes metrics from services that exist in the minimal demo environment
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'kessel-local'
+    environment: 'development'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - 'alerts.yml'
+
+# Scrape configurations - ONLY services that exist in kessel-in-a-box
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          component: 'monitoring'
+
+  # SpiceDB metrics (authorization service)
+  - job_name: 'spicedb'
+    static_configs:
+      - targets: ['spicedb:9090']
+        labels:
+          service: 'spicedb'
+          component: 'authorization'
+    metric_relabel_configs:
+      # Keep SpiceDB, gRPC, and runtime metrics
+      - source_labels: [__name__]
+        regex: '(spicedb_.*|grpc_.*|crdb_.*|go_.*|pgxpool_.*|process_.*)'
+        action: keep
+
+  # Node Exporter - host metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'host'
+          component: 'system'
+
+  # Jaeger metrics (distributed tracing)
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']
+        labels:
+          service: 'jaeger'
+          component: 'tracing'
+    # Mark as optional - won't fail if not available
+    scrape_interval: 30s
+    scrape_timeout: 5s
+
+  # Health Check Exporter - Monitors services via health endpoints
+  # NOTE: In kessel-in-a-box minimal demo, no services are monitored
+  # The exporter is included for future use with full Kessel deployment
+  - job_name: 'health-exporter'
+    static_configs:
+      - targets: ['health-exporter:9091']
+        labels:
+          service: 'health-exporter'
+          component: 'monitoring'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    # Relabel exported_job to job for proper dashboard display
+    # (Only used if services are configured in health_exporter.py)
+    metric_relabel_configs:
+      # Copy exported_job to job for services monitored by health-exporter
+      - source_labels: [exported_job]
+        target_label: job
+        regex: '(.+)'
+        replacement: '${1}'
+      # Remove the exported_job label after copying
+      - regex: 'exported_job'
+        action: labeldrop
+    # This exporter COULD provide metrics for (in full deployment):
+    # - inventory-api (not in minimal demo)
+    # - relations-api (not in minimal demo)
+    # - rbac (not in minimal demo)
+    # - host-inventory (not in minimal demo)
+
+  # Grafana metrics (optional)
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+        labels:
+          service: 'grafana'
+          component: 'visualization'
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+    # Mark as optional
+    scrape_timeout: 5s
