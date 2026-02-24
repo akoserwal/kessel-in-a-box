@@ -30,26 +30,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Service health check configurations
-# NOTE: Empty for kessel-in-a-box minimal demo
-# These services don't exist in the minimal environment
 SERVICES = {
-    # Uncomment these when deploying full Kessel stack:
-    # 'inventory-api': {
-    #     'url': 'http://kessel-inventory-api:8000/health',
-    #     'timeout': 5,
-    # },
-    # 'relations-api': {
-    #     'url': 'http://kessel-relations-api:8000/health',
-    #     'timeout': 5,
-    # },
-    # 'rbac': {
-    #     'url': 'http://insights-rbac:8080/health',
-    #     'timeout': 5,
-    # },
-    # 'host-inventory': {
-    #     'url': 'http://insights-host-inventory:8081/health',
-    #     'timeout': 5,
-    # },
+    'inventory-api': {
+        'url': 'http://kessel-inventory-api:8000/api/kessel/v1/livez',
+        'timeout': 5,
+    },
+    'relations-api': {
+        'url': 'http://kessel-relations-api:8000/api/authz/v1beta1/tuples',
+        'timeout': 5,
+        'method': 'POST',
+        'body': '{"tuples":[]}',
+    },
+    'rbac': {
+        'url': 'http://insights-rbac:8080/health',
+        'timeout': 5,
+    },
+    'host-inventory': {
+        'url': 'http://insights-host-inventory:8081/health',
+        'timeout': 5,
+    },
 }
 
 def check_service_health(service_name, config):
@@ -60,11 +59,21 @@ def check_service_health(service_name, config):
         1 if healthy, 0 if unhealthy
     """
     try:
-        response = requests.get(
-            config['url'],
-            timeout=config['timeout'],
-            allow_redirects=True
-        )
+        method = config.get('method', 'GET').upper()
+        if method == 'POST':
+            response = requests.post(
+                config['url'],
+                data=config.get('body', ''),
+                headers={'Content-Type': 'application/json'},
+                timeout=config['timeout'],
+                allow_redirects=True
+            )
+        else:
+            response = requests.get(
+                config['url'],
+                timeout=config['timeout'],
+                allow_redirects=True
+            )
 
         # Consider 2xx and 3xx as healthy
         if 200 <= response.status_code < 400:

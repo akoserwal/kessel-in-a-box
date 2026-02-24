@@ -1,51 +1,34 @@
-# Kessel-in-a-Box: Kessel Services (Phase 5)
-# kessel-relations-api and kessel-inventory-api
-# Note: Redis removed to match production architecture
+# Kessel-in-a-Box: Kessel Services
+# Uses the REAL project-kessel/relations-api and project-kessel/inventory-api
+# Images from quay.io/cloudservices/kessel-relations and kessel-inventory
 
 services:
   # Kessel Relations API - Authorization service (talks to SpiceDB)
+  # Source: https://github.com/project-kessel/relations-api
   # CRITICAL: This is the ONLY service that talks to SpiceDB directly
   kessel-relations-api:
-    build:
-      context: ../services/kessel-relations-api
-      dockerfile: Dockerfile
+    image: quay.io/cloudservices/kessel-relations:${KESSEL_RELATIONS_TAG:-latest}
     container_name: kessel-relations-api
+    command: ["-conf", "/configs"]
     ports:
-      - "${KESSEL_RELATIONS_PORT:-8082}:8000"  # HTTP/gRPC (multiplexed)
-      - "${KESSEL_RELATIONS_METRICS_PORT:-9001}:9000"  # Prometheus metrics
+      - "${KESSEL_RELATIONS_PORT:-8082}:8000"  # HTTP (path prefix: /api/authz)
+      - "${KESSEL_RELATIONS_GRPC_PORT:-9001}:9000"  # gRPC
     environment:
-      # SpiceDB connection (ONLY relations-api has this!)
+      SPICEDB_PRESHARED: ${SPICEDB_PRESHARED_KEY:-testtesttesttest}
       SPICEDB_ENDPOINT: spicedb:50051
-      SPICEDB_TOKEN: ${SPICEDB_PRESHARED_KEY:-testtesttesttest}
-      SPICEDB_INSECURE: "true"
-
-      # Authentication
-      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
-
-      # Observability
-      LOG_LEVEL: ${KESSEL_RELATIONS_LOG_LEVEL:-info}
-      LOG_FORMAT: json
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_ENDPOINT:-}
-
-      # Server configuration
-      SERVER_PORT: "8000"
-      METRICS_PORT: "9000"
-      ENABLE_GRPC: "true"
-      ENABLE_HTTP: "true"
-
-      # Performance tuning
-      MAX_CONNECTION_AGE: 30m
-      MAX_CONNECTION_AGE_GRACE: 5m
+      SPICEDB_SCHEMA_FILE: /schema/schema.zed
+    volumes:
+      - ../services/kessel-relations-api/configs:/configs:ro
+      - ../services/spicedb/schema:/schema:ro
     depends_on:
       spicedb:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"tuples\":[]}' http://localhost:8000/api/authz/v1beta1/tuples || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 30s
     networks:
       - kessel-network
     deploy:
@@ -57,67 +40,45 @@ services:
           memory: 256M
           cpus: '0.5'
 
+  # Kessel Inventory API - Database migration (runs once before serve)
+  kessel-inventory-migrate:
+    image: quay.io/cloudservices/kessel-inventory:${KESSEL_INVENTORY_TAG:-latest}
+    container_name: kessel-inventory-migrate
+    command: ["migrate", "--config", "/config/.inventory-api.yaml"]
+    volumes:
+      - ../services/kessel-inventory-api/.inventory-api.yaml:/config/.inventory-api.yaml:ro
+    depends_on:
+      postgres-inventory:
+        condition: service_healthy
+    networks:
+      - kessel-network
+    restart: "no"
+
   # Kessel Inventory API - Resource management + Authorization proxy
-  # CRITICAL: Depends on relations-api for all authorization calls!
+  # Source: https://github.com/project-kessel/inventory-api
+  # CRITICAL: Depends on relations-api for all authorization calls (via gRPC)!
   kessel-inventory-api:
-    build:
-      context: ../services/kessel-inventory-api
-      dockerfile: Dockerfile
+    image: quay.io/cloudservices/kessel-inventory:${KESSEL_INVENTORY_TAG:-latest}
     container_name: kessel-inventory-api
-    extra_hosts:
-      - "kessel-relations-api:${DOCKER_HOST_IP:-host-gateway}"
+    command: ["serve", "--config", "/config/.inventory-api.yaml"]
     ports:
-      - "${KESSEL_INVENTORY_PORT:-8083}:8000"  # HTTP/gRPC (multiplexed)
-      - "${KESSEL_INVENTORY_METRICS_PORT:-9002}:9000"  # Prometheus metrics
-    environment:
-      # CRITICAL: Points to relations-api, NOT SpiceDB directly!
-      KESSEL_RELATIONS_ENDPOINT: http://kessel-relations-api:8000
-      KESSEL_RELATIONS_INSECURE: "true"
-
-      # PostgreSQL - Resource storage
-      POSTGRES_HOST: postgres-inventory
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: inventory
-      POSTGRES_USER: inventory
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretpassword}
-      POSTGRES_SSLMODE: disable
-
-      # Kafka - Event publishing
-      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
-      KAFKA_TOPIC_INVENTORY_EVENTS: inventory.resource.events
-      KAFKA_ENABLED: "true"
-
-      # Authentication
-      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
-
-      # Observability
-      LOG_LEVEL: ${KESSEL_INVENTORY_LOG_LEVEL:-info}
-      LOG_FORMAT: json
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_ENDPOINT:-}
-
-      # Server configuration
-      SERVER_PORT: "8000"
-      METRICS_PORT: "9000"
-      ENABLE_GRPC: "true"
-      ENABLE_HTTP: "true"
-
-      # Performance tuning
-      MAX_CONNECTION_AGE: 30m
-      MAX_CONNECTION_AGE_GRACE: 5m
-      DB_MAX_OPEN_CONNS: "25"
-      DB_MAX_IDLE_CONNS: "5"
+      - "${KESSEL_INVENTORY_PORT:-8083}:8000"  # HTTP
+      - "${KESSEL_INVENTORY_GRPC_PORT:-9002}:9000"  # gRPC
+    volumes:
+      - ../services/kessel-inventory-api/.inventory-api.yaml:/config/.inventory-api.yaml:ro
     depends_on:
       kessel-relations-api:
-        condition: service_healthy  # MUST wait for relations-api!
+        condition: service_healthy
+      kessel-inventory-migrate:
+        condition: service_completed_successfully
       postgres-inventory:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/kessel/v1/livez"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 30s
     networks:
       - kessel-network
     deploy:

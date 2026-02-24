@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -394,15 +395,52 @@ func (h *ConsumerGroupHandler) deleteRoleRelationships(event DebeziumEvent) erro
 	return nil
 }
 
+// buildTuplesBody converts a flat RelationshipRequest into the real
+// project-kessel/relations-api CreateTuplesRequest format
+func buildTuplesBody(req *RelationshipRequest) ([]byte, error) {
+	// Parse "rbac/workspace" into namespace="rbac", name="workspace"
+	resParts := strings.SplitN(req.ResourceType, "/", 2)
+	subParts := strings.SplitN(req.SubjectType, "/", 2)
+
+	resNs, resName := resParts[0], resParts[0]
+	if len(resParts) == 2 {
+		resNs, resName = resParts[0], resParts[1]
+	}
+	subNs, subName := subParts[0], subParts[0]
+	if len(subParts) == 2 {
+		subNs, subName = subParts[0], subParts[1]
+	}
+
+	tuplesReq := map[string]interface{}{
+		"tuples": []map[string]interface{}{
+			{
+				"resource": map[string]interface{}{
+					"type": map[string]string{"namespace": resNs, "name": resName},
+					"id":   req.ResourceID,
+				},
+				"relation": req.Relation,
+				"subject": map[string]interface{}{
+					"subject": map[string]interface{}{
+						"type": map[string]string{"namespace": subNs, "name": subName},
+						"id":   req.SubjectID,
+					},
+				},
+			},
+		},
+	}
+
+	return json.Marshal(tuplesReq)
+}
+
 // createRelationship creates a relationship in SpiceDB via the Relations API
-// Implements the retry logic for transient failures
+// Uses the real project-kessel/relations-api CreateTuples endpoint
 func (h *ConsumerGroupHandler) createRelationship(req *RelationshipRequest) error {
-	jsonData, err := json.Marshal(req)
+	jsonData, err := buildTuplesBody(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal relationship request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1/relationships", h.relationsAPIURL)
+	url := fmt.Sprintf("%s/api/authz/v1beta1/tuples", h.relationsAPIURL)
 	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
@@ -433,19 +471,28 @@ func (h *ConsumerGroupHandler) createRelationship(req *RelationshipRequest) erro
 }
 
 // deleteRelationship deletes a relationship from SpiceDB via the Relations API
+// Uses the real project-kessel/relations-api DELETE with query parameter filters
 func (h *ConsumerGroupHandler) deleteRelationship(req *RelationshipRequest) error {
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal relationship request: %w", err)
+	// Parse namespace/type from "rbac/workspace" format
+	resParts := strings.SplitN(req.ResourceType, "/", 2)
+	subParts := strings.SplitN(req.SubjectType, "/", 2)
+
+	resNs, resName := resParts[0], resParts[0]
+	if len(resParts) == 2 {
+		resNs, resName = resParts[0], resParts[1]
+	}
+	subNs, subName := subParts[0], subParts[0]
+	if len(subParts) == 2 {
+		subNs, subName = subParts[0], subParts[1]
 	}
 
-	url := fmt.Sprintf("%s/v1/relationships", h.relationsAPIURL)
-	httpReq, err := http.NewRequest("DELETE", url, bytes.NewBuffer(jsonData))
+	url := fmt.Sprintf("%s/api/authz/v1beta1/tuples?filter.resource_namespace=%s&filter.resource_type=%s&filter.resource_id=%s&filter.relation=%s&filter.subject_filter.subject_namespace=%s&filter.subject_filter.subject_type=%s&filter.subject_filter.subject_id=%s",
+		h.relationsAPIURL, resNs, resName, req.ResourceID, req.Relation, subNs, subName, req.SubjectID)
+
+	httpReq, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
 
 	log.Printf("Deleting relationship: %s:%s#%s@%s:%s",
 		req.ResourceType, req.ResourceID,

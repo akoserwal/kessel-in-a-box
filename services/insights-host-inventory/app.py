@@ -113,7 +113,7 @@ def create_host():
         # This is the "dual-write" - both DB and API
         try:
             kessel_response = requests.post(
-                f'{KESSEL_INVENTORY_URL}/api/inventory/v1/resources',
+                f'{KESSEL_INVENTORY_URL}/api/inventory/v1beta2/resources',
                 json={
                     'resource_type': 'hbi/host',
                     'resource_id': host_id,

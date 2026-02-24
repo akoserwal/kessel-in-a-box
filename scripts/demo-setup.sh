@@ -2,6 +2,7 @@
 #
 # Demo Setup Script
 # Prepares kessel-in-a-box for demo presentation using the stage schema
+# Uses the real project-kessel/relations-api and project-kessel/inventory-api
 #
 
 set -e
@@ -30,64 +31,94 @@ if ! command -v docker &> /dev/null; then
 fi
 echo -e "${GREEN}  Docker installed${NC}"
 
-if ! command -v grpcurl &> /dev/null; then
-    echo -e "${RED}Error: grpcurl not found. Please install grpcurl:${NC}"
-    echo "  brew install grpcurl  # macOS"
-    echo "  go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}Error: curl not found. Please install curl.${NC}"
     exit 1
 fi
-echo -e "${GREEN}  grpcurl installed${NC}"
+echo -e "${GREEN}  curl installed${NC}"
 
-if ! command -v zed &> /dev/null; then
-    echo -e "${RED}Error: zed not found. Please install zed:${NC}"
-    echo "  brew install authzed/tap/zed  # macOS"
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}Error: python3 not found.${NC}"
     exit 1
 fi
-echo -e "${GREEN}  zed CLI installed${NC}"
+echo -e "${GREEN}  python3 installed${NC}"
+
+# Optional: zed for schema management
+if command -v zed &> /dev/null; then
+    echo -e "${GREEN}  zed CLI installed (for schema management)${NC}"
+    HAS_ZED=true
+else
+    echo -e "${YELLOW}  zed CLI not found (schema must be loaded via Docker)${NC}"
+    HAS_ZED=false
+fi
 echo ""
 
-SPICEDB_ENDPOINT="localhost:50051"
-AUTH_TOKEN="testtesttesttest"
+RELATIONS_API="http://localhost:8082"
+KESSEL_INVENTORY_API="http://localhost:8083"
+INVENTORY_API="http://localhost:8081"
+RBAC_API="http://localhost:8080"
 
-# Check SpiceDB is running
-echo -e "${YELLOW}Checking SpiceDB...${NC}"
-if ! grpcurl -plaintext -H "authorization: Bearer $AUTH_TOKEN" \
-    "$SPICEDB_ENDPOINT" list &>/dev/null; then
-    echo -e "${RED}Error: SpiceDB not reachable at $SPICEDB_ENDPOINT${NC}"
+# Check Relations API is running
+echo -e "${YELLOW}Checking services...${NC}"
+if ! curl -s "$RELATIONS_API/api/authz/v1beta1/health" &>/dev/null; then
+    echo -e "${RED}Error: Relations API not reachable at $RELATIONS_API${NC}"
     echo "Start services: cd compose && docker compose up -d"
     exit 1
 fi
-echo -e "${GREEN}  SpiceDB is running${NC}"
+echo -e "${GREEN}  Relations API is running${NC}"
 
-# Verify stage schema is loaded
-SCHEMA_DEFS=$(zed --endpoint "$SPICEDB_ENDPOINT" --token "$AUTH_TOKEN" --insecure \
-    schema read 2>/dev/null | grep "^definition " | wc -l | tr -d ' ')
-
-if [ "$SCHEMA_DEFS" -lt 8 ]; then
-    echo -e "${YELLOW}  Stage schema not loaded, loading now...${NC}"
-    zed --endpoint "$SPICEDB_ENDPOINT" --token "$AUTH_TOKEN" --insecure \
-        schema write "$PROJECT_ROOT/services/spicedb/schema/schema.zed" 2>/dev/null
+if ! curl -s "$KESSEL_INVENTORY_API/api/kessel/v1/livez" &>/dev/null; then
+    echo -e "${YELLOW}  Kessel Inventory API not reachable at $KESSEL_INVENTORY_API${NC}"
+else
+    echo -e "${GREEN}  Kessel Inventory API is running (proxies permission checks)${NC}"
 fi
-echo -e "${GREEN}  Stage schema loaded ($SCHEMA_DEFS definitions)${NC}"
+
+if ! curl -s "$INVENTORY_API/health" &>/dev/null; then
+    echo -e "${YELLOW}  Insights Inventory API not reachable (host creation will be skipped)${NC}"
+else
+    echo -e "${GREEN}  Insights Inventory API is running${NC}"
+fi
+
+if ! curl -s "$RBAC_API/health" &>/dev/null; then
+    echo -e "${YELLOW}  RBAC API not reachable (workspace creation will be skipped)${NC}"
+else
+    echo -e "${GREEN}  RBAC API is running${NC}"
+fi
+
+# Load schema if zed is available
+if [ "$HAS_ZED" = true ]; then
+    SPICEDB_ENDPOINT="localhost:50051"
+    AUTH_TOKEN="testtesttesttest"
+
+    SCHEMA_DEFS=$(zed --endpoint "$SPICEDB_ENDPOINT" --token "$AUTH_TOKEN" --insecure \
+        schema read 2>/dev/null | grep "^definition " | wc -l | tr -d ' ')
+
+    if [ "$SCHEMA_DEFS" -lt 8 ]; then
+        echo -e "${YELLOW}  Stage schema not loaded, loading now...${NC}"
+        zed --endpoint "$SPICEDB_ENDPOINT" --token "$AUTH_TOKEN" --insecure \
+            schema write "$PROJECT_ROOT/services/spicedb/schema/schema.zed" 2>/dev/null
+    fi
+    echo -e "${GREEN}  Stage schema loaded ($SCHEMA_DEFS definitions)${NC}"
+fi
 echo ""
 
 # Create demo directory
 DEMO_DIR="/tmp/kessel-demo"
 mkdir -p "$DEMO_DIR"
 
-echo -e "${YELLOW}Generating demo data files...${NC}"
+echo -e "${YELLOW}Generating demo data files (Relations API CreateTuples format)...${NC}"
+
+# Demo data files use the real project-kessel/relations-api CreateTuples format
+# Each file contains a CreateTuplesRequest body with tuples array
 
 # Scenario 1: Team membership (group + principal)
 cat > "$DEMO_DIR/scenario1-team-membership.json" << 'EOF'
 {
-  "updates": [
+  "tuples": [
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/group", "objectId": "engineering"},
-        "relation": "t_member",
-        "subject": {"object": {"objectType": "rbac/principal", "objectId": "alice"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "group" }, "id": "engineering" },
+      "relation": "t_member",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "principal" }, "id": "alice" } }
     }
   ]
 }
@@ -96,57 +127,36 @@ EOF
 # Scenario 2: Create role + role binding + workspace
 cat > "$DEMO_DIR/scenario2-workspace-access.json" << 'EOF'
 {
-  "updates": [
+  "tuples": [
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/role", "objectId": "host_viewer"},
-        "relation": "t_inventory_hosts_read",
-        "subject": {"object": {"objectType": "rbac/principal", "objectId": "*"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "role" }, "id": "host_viewer" },
+      "relation": "t_inventory_hosts_read",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "principal" }, "id": "*" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/role_binding", "objectId": "eng_prod_binding"},
-        "relation": "t_subject",
-        "subject": {
-          "object": {"objectType": "rbac/group", "objectId": "engineering"},
-          "optionalRelation": "member"
-        }
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "eng_prod_binding" },
+      "relation": "t_subject",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "group" }, "id": "engineering" }, "relation": "member" }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/role_binding", "objectId": "eng_prod_binding"},
-        "relation": "t_role",
-        "subject": {"object": {"objectType": "rbac/role", "objectId": "host_viewer"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "eng_prod_binding" },
+      "relation": "t_role",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "role" }, "id": "host_viewer" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/tenant", "objectId": "techcorp"},
-        "relation": "t_platform",
-        "subject": {"object": {"objectType": "rbac/platform", "objectId": "techcorp_defaults"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "tenant" }, "id": "techcorp" },
+      "relation": "t_platform",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "platform" }, "id": "techcorp_defaults" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/workspace", "objectId": "production"},
-        "relation": "t_parent",
-        "subject": {"object": {"objectType": "rbac/tenant", "objectId": "techcorp"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "production" },
+      "relation": "t_parent",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "tenant" }, "id": "techcorp" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/workspace", "objectId": "production"},
-        "relation": "t_binding",
-        "subject": {"object": {"objectType": "rbac/role_binding", "objectId": "eng_prod_binding"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "production" },
+      "relation": "t_binding",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "eng_prod_binding" } }
     }
   ]
 }
@@ -155,30 +165,24 @@ EOF
 # Scenario 3: Host in workspace (inheritance)
 cat > "$DEMO_DIR/scenario3-host-access.json" << 'EOF'
 {
-  "updates": [
+  "tuples": [
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "hbi/host", "objectId": "web-server-01"},
-        "relation": "t_workspace",
-        "subject": {"object": {"objectType": "rbac/workspace", "objectId": "production"}}
-      }
+      "resource": { "type": { "namespace": "hbi", "name": "host" }, "id": "web-server-01" },
+      "relation": "t_workspace",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "production" } }
     }
   ]
 }
 EOF
 
-# Scenario 4: Revocation (remove from group)
+# Scenario 4: Revocation (remove from group) — uses DELETE endpoint
 cat > "$DEMO_DIR/scenario4-revoke.json" << 'EOF'
 {
-  "updates": [
+  "tuples": [
     {
-      "operation": "OPERATION_DELETE",
-      "relationship": {
-        "resource": {"objectType": "rbac/group", "objectId": "engineering"},
-        "relation": "t_member",
-        "subject": {"object": {"objectType": "rbac/principal", "objectId": "alice"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "group" }, "id": "engineering" },
+      "relation": "t_member",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "principal" }, "id": "alice" } }
     }
   ]
 }
@@ -187,46 +191,31 @@ EOF
 # Scenario 5: Direct binding for alice
 cat > "$DEMO_DIR/scenario5-direct-binding.json" << 'EOF'
 {
-  "updates": [
+  "tuples": [
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/workspace", "objectId": "staging"},
-        "relation": "t_parent",
-        "subject": {"object": {"objectType": "rbac/tenant", "objectId": "techcorp"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "staging" },
+      "relation": "t_parent",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "tenant" }, "id": "techcorp" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/role_binding", "objectId": "alice_staging_binding"},
-        "relation": "t_subject",
-        "subject": {"object": {"objectType": "rbac/principal", "objectId": "alice"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "alice_staging_binding" },
+      "relation": "t_subject",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "principal" }, "id": "alice" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/role_binding", "objectId": "alice_staging_binding"},
-        "relation": "t_role",
-        "subject": {"object": {"objectType": "rbac/role", "objectId": "host_viewer"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "alice_staging_binding" },
+      "relation": "t_role",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "role" }, "id": "host_viewer" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "rbac/workspace", "objectId": "staging"},
-        "relation": "t_binding",
-        "subject": {"object": {"objectType": "rbac/role_binding", "objectId": "alice_staging_binding"}}
-      }
+      "resource": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "staging" },
+      "relation": "t_binding",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "role_binding" }, "id": "alice_staging_binding" } }
     },
     {
-      "operation": "OPERATION_TOUCH",
-      "relationship": {
-        "resource": {"objectType": "hbi/host", "objectId": "staging-app-01"},
-        "relation": "t_workspace",
-        "subject": {"object": {"objectType": "rbac/workspace", "objectId": "staging"}}
-      }
+      "resource": { "type": { "namespace": "hbi", "name": "host" }, "id": "staging-app-01" },
+      "relation": "t_workspace",
+      "subject": { "subject": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "staging" } }
     }
   ]
 }
@@ -238,7 +227,8 @@ echo ""
 # Create helper script
 cat > "$DEMO_DIR/check-permission.sh" << 'EOFSCRIPT'
 #!/bin/bash
-# Quick permission check helper for stage schema
+# Quick permission check helper
+# Routes hbi/* checks through Inventory API, rbac/* checks through Relations API
 # Usage: check-permission.sh <principal> <permission> <resource_type:resource_id>
 # Example: check-permission.sh alice view hbi/host:web-server-01
 
@@ -252,20 +242,31 @@ fi
 PRINCIPAL=$1
 PERMISSION=$2
 RESOURCE=$3
+RELATIONS_API="${RELATIONS_API:-http://localhost:8082}"
+KESSEL_INVENTORY_API="${KESSEL_INVENTORY_API:-http://localhost:8083}"
 
+# Parse resource_type (namespace/name) and resource_id
 RESOURCE_TYPE=$(echo "$RESOURCE" | rev | cut -d: -f2- | rev)
 RESOURCE_ID=$(echo "$RESOURCE" | rev | cut -d: -f1 | rev)
+RESOURCE_NS=$(echo "$RESOURCE_TYPE" | cut -d/ -f1)
+RESOURCE_NAME=$(echo "$RESOURCE_TYPE" | cut -d/ -f2)
 
-grpcurl -plaintext \
-  -H "authorization: Bearer testtesttesttest" \
+# Route based on resource type
+if echo "$RESOURCE_TYPE" | grep -q "^hbi/"; then
+    API_URL="$KESSEL_INVENTORY_API/api/kessel/v1beta2/check"
+    echo "Routing via Inventory API → Relations API" >&2
+else
+    API_URL="$RELATIONS_API/api/authz/v1beta1/check"
+    echo "Routing via Relations API (direct)" >&2
+fi
+
+curl -s -X POST "$API_URL" \
+  -H "Content-Type: application/json" \
   -d "{
-    \"resource\": {\"objectType\": \"$RESOURCE_TYPE\", \"objectId\": \"$RESOURCE_ID\"},
-    \"permission\": \"$PERMISSION\",
-    \"subject\": {\"object\": {\"objectType\": \"rbac/principal\", \"objectId\": \"$PRINCIPAL\"}},
-    \"consistency\": {\"fullyConsistent\": true}
-  }" \
-  localhost:50051 authzed.api.v1.PermissionsService/CheckPermission 2>/dev/null | \
-  python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('permissionship','UNKNOWN'))" 2>/dev/null || \
+    \"resource\": { \"type\": { \"namespace\": \"$RESOURCE_NS\", \"name\": \"$RESOURCE_NAME\" }, \"id\": \"$RESOURCE_ID\" },
+    \"relation\": \"$PERMISSION\",
+    \"subject\": { \"subject\": { \"type\": { \"namespace\": \"rbac\", \"name\": \"principal\" }, \"id\": \"$PRINCIPAL\" } }
+  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('allowed','UNKNOWN'))" 2>/dev/null || \
   echo "ERROR: Could not check permission"
 EOFSCRIPT
 
@@ -279,8 +280,17 @@ echo -e "${BLUE}  Demo Ready!${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 echo -e "${GREEN}  kessel-in-a-box is running${NC}"
-echo -e "${GREEN}  Stage schema loaded (rbac-config)${NC}"
-echo -e "${GREEN}  Demo data files ready${NC}"
+echo -e "${GREEN}  Demo data files ready (Relations API CreateTuples format)${NC}"
+echo ""
+echo -e "${YELLOW}Service URLs:${NC}"
+echo "  Relations API:        $RELATIONS_API"
+echo "  Kessel Inventory API: $KESSEL_INVENTORY_API"
+echo "  Insights Inventory:   $INVENTORY_API"
+echo "  Insights RBAC:        $RBAC_API"
+echo ""
+echo -e "${YELLOW}Permission Check Routing:${NC}"
+echo "  hbi/* → $KESSEL_INVENTORY_API/api/kessel/v1beta2/check → Relations API → SpiceDB"
+echo "  rbac/* → $RELATIONS_API/api/authz/v1beta1/check → SpiceDB (direct, like insights-rbac)"
 echo ""
 echo -e "${YELLOW}Demo Resources:${NC}"
 echo "  Demo directory:  $DEMO_DIR"

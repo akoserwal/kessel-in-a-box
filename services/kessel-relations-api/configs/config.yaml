@@ -1,0 +1,18 @@
+server:
+  http:
+    addr: 0.0.0.0:8000
+    timeout: 1s
+    pathprefix: /api/authz
+  grpc:
+    addr: 0.0.0.0:9000
+    timeout: 30s
+  auth:
+    enableAuth: false
+  minLogLevel: info
+data:
+  spiceDb:
+    useTLS: false
+    endpoint: spicedb:50051
+    token: testtesttesttest
+    schemaFile: /schema/schema.zed
+    fullyConsistent: false

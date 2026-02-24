@@ -295,14 +295,14 @@ log_info "These tests will fail gracefully if schema is not present"
 
 # Create relationship (workspace -> resource)
 log_info "Creating test relationship..."
-RELATIONSHIP_RESPONSE=$(curl -s -X POST http://localhost:8082/v1/relationships \
+RELATIONSHIP_RESPONSE=$(curl -s -X POST http://localhost:8082/api/authz/v1beta1/tuples \
     -H "Content-Type: application/json" \
     -d '{
-        "resource_type": "workspace",
-        "resource_id": "'$WORKSPACE_ID'",
-        "relation": "parent",
-        "subject_type": "k8s_cluster",
-        "subject_id": "'$RESOURCE_ID'"
+        "tuples": [{
+            "resource": { "type": { "namespace": "rbac", "name": "workspace" }, "id": "'$WORKSPACE_ID'" },
+            "relation": "t_parent",
+            "subject": { "subject": { "type": { "namespace": "hbi", "name": "host" }, "id": "'$RESOURCE_ID'" } }
+        }]
     }' 2>&1 || echo '{"error":"Schema not loaded"}')
 
 echo "$RELATIONSHIP_RESPONSE" > "$OUTPUT_DIR/24-create-relationship-request.json"
@@ -315,14 +315,12 @@ fi
 
 # Check permission
 log_info "Checking test permission..."
-PERMISSION_RESPONSE=$(curl -s -X POST http://localhost:8082/v1/permissions/check \
+PERMISSION_RESPONSE=$(curl -s -X POST http://localhost:8082/api/authz/v1beta1/check \
     -H "Content-Type: application/json" \
     -d '{
-        "resource_type": "k8s_cluster",
-        "resource_id": "'$RESOURCE_ID'",
-        "permission": "view",
-        "subject_type": "user",
-        "subject_id": "user123"
+        "resource": { "type": { "namespace": "hbi", "name": "host" }, "id": "'$RESOURCE_ID'" },
+        "relation": "view",
+        "subject": { "subject": { "type": { "namespace": "rbac", "name": "principal" }, "id": "user123" } }
     }' 2>&1 || echo '{"error":"Schema not loaded"}')
 
 echo "$PERMISSION_RESPONSE" > "$OUTPUT_DIR/25-check-permission-request.json"

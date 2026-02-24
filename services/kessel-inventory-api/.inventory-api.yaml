@@ -1,0 +1,32 @@
+server:
+  http:
+    address: 0.0.0.0:8000
+    timeout-seconds: 300
+  grpc:
+    address: 0.0.0.0:9000
+    timeout-seconds: 300
+
+authn:
+  allow-unauthenticated: true
+
+authz:
+  impl: kessel
+  kessel:
+    url: kessel-relations-api:9000
+    insecure-client: true
+    enable-oidc-auth: false
+
+storage:
+  database: postgres
+  postgres:
+    host: postgres-inventory
+    port: 5432
+    dbname: inventory
+    user: inventory
+    password: secretpassword
+
+consumer:
+  enabled: false
+
+log:
+  level: info

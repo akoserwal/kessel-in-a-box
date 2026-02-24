@@ -1,5 +1,6 @@
 -- Kessel-in-a-Box: Inventory Database Initialization
--- Database for insights-host-inventory AND kessel-inventory-api
+-- Database for insights-host-inventory
+-- NOTE: kessel-inventory-api (real) runs its own migrations via 'inventory-api migrate'
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -7,7 +8,6 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- Create schemas
 CREATE SCHEMA IF NOT EXISTS inventory;      -- insights-host-inventory schema
-CREATE SCHEMA IF NOT EXISTS kessel;         -- kessel-inventory-api schema
 
 -- ============================================================================
 -- insights-host-inventory tables (simplified)
@@ -48,53 +48,16 @@ CREATE INDEX IF NOT EXISTS idx_host_groups_workspace ON inventory.host_groups(wo
 CREATE INDEX IF NOT EXISTS idx_tags_host_id ON inventory.tags(host_id);
 CREATE INDEX IF NOT EXISTS idx_tags_key ON inventory.tags(key);
 
--- ============================================================================
--- kessel-inventory-api tables (simplified)
--- ============================================================================
-
--- Resources table
-CREATE TABLE IF NOT EXISTS kessel.resources (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    resource_type VARCHAR(255) NOT NULL,
-    resource_id VARCHAR(255) NOT NULL,
-    workspace_id UUID NOT NULL,
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(resource_type, resource_id, workspace_id)
-);
-
--- Resource relationships table
-CREATE TABLE IF NOT EXISTS kessel.resource_relationships (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    resource_id UUID REFERENCES kessel.resources(id) ON DELETE CASCADE,
-    relation VARCHAR(255) NOT NULL,
-    subject_type VARCHAR(255) NOT NULL,
-    subject_id VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(resource_id, relation, subject_type, subject_id)
-);
-
--- Indexes for kessel-inventory-api
-CREATE INDEX IF NOT EXISTS idx_resources_type ON kessel.resources(resource_type);
-CREATE INDEX IF NOT EXISTS idx_resources_workspace ON kessel.resources(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_resources_lookup ON kessel.resources(resource_type, resource_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_resource ON kessel.resource_relationships(resource_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_subject ON kessel.resource_relationships(subject_type, subject_id);
-
 -- Grant permissions
 GRANT ALL PRIVILEGES ON SCHEMA inventory TO inventory;
-GRANT ALL PRIVILEGES ON SCHEMA kessel TO inventory;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA inventory TO inventory;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA kessel TO inventory;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA inventory TO inventory;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA kessel TO inventory;
 
 -- Set default privileges
 ALTER DEFAULT PRIVILEGES IN SCHEMA inventory GRANT ALL ON TABLES TO inventory;
 ALTER DEFAULT PRIVILEGES IN SCHEMA inventory GRANT ALL ON SEQUENCES TO inventory;
-ALTER DEFAULT PRIVILEGES IN SCHEMA kessel GRANT ALL ON TABLES TO inventory;
-ALTER DEFAULT PRIVILEGES IN SCHEMA kessel GRANT ALL ON SEQUENCES TO inventory;
+
+-- The real kessel-inventory-api will run its own migrations on the public schema
 
 -- Insert sample data for testing
 INSERT INTO inventory.hosts (id, canonical_facts, display_name, workspace_id) VALUES
